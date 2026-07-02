@@ -1,0 +1,210 @@
+package ai.symly.db
+
+import ai.symly.*
+import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
+
+class DatabaseManager(private val database: GestureDatabase) {
+    
+    private val queries = database.gestureDatabaseQueries
+    
+    suspend fun saveGesture(gesture: ai.symly.Gesture) = withContext(Dispatchers.IO) {
+        queries.insertGesture(
+            id = gesture.id,
+            name = gesture.name,
+            recordMode = gesture.recordMode.name
+        )
+    }
+    
+    suspend fun getAllGestures(): List<ai.symly.Gesture> = withContext(Dispatchers.IO) {
+        queries.selectAllGestures().executeAsList().map {
+            ai.symly.Gesture(
+                id = it.id,
+                name = it.name,
+                recordMode = ai.symly.RecordMode.valueOf(it.recordMode)
+            )
+        }
+    }
+    
+    suspend fun getGestureById(id: String): ai.symly.Gesture? = withContext(Dispatchers.IO) {
+        queries.selectGestureById(id).executeAsOneOrNull()?.let {
+            ai.symly.Gesture(
+                id = it.id,
+                name = it.name,
+                recordMode = ai.symly.RecordMode.valueOf(it.recordMode)
+            )
+        }
+    }
+    
+    suspend fun deleteGesture(id: String) = withContext(Dispatchers.IO) {
+        queries.deleteGesture(id)
+    }
+    
+    suspend fun saveRecording(recording: ai.symly.Recording) = withContext(Dispatchers.IO) {
+        queries.insertRecording(
+            id = recording.id,
+            gestureId = recording.gestureId,
+            timestamp = recording.timestamp,
+            durationMs = recording.durationMs,
+            paddingMs = recording.paddingMs,
+            sourceCaptureId = recording.sourceCaptureId,
+            sampleSetId = recording.sampleSetId,
+            offsetMs = recording.offsetMs
+        )
+        
+        recording.samples.forEachIndexed { index, sample ->
+            queries.insertImuSample(
+                recordingId = recording.id,
+                sequence = index.toLong(),
+                ax = sample.ax.toDouble(),
+                ay = sample.ay.toDouble(),
+                az = sample.az.toDouble(),
+                gx = sample.gx.toDouble(),
+                gy = sample.gy.toDouble(),
+                gz = sample.gz.toDouble(),
+                roll = sample.roll.toDouble(),
+                pitch = sample.pitch.toDouble(),
+                yaw = sample.yaw.toDouble()
+            )
+        }
+    }
+    
+    suspend fun getRecordingsByGesture(gestureId: String): List<ai.symly.Recording> = withContext(Dispatchers.IO) {
+        val recordings = queries.selectRecordingsByGesture(gestureId).executeAsList()
+        recordings.map { rec ->
+            val samples = queries.selectSamplesByRecording(rec.id).executeAsList().map {
+                ai.symly.ImuSample(
+                    ax = it.ax.toFloat(),
+                    ay = it.ay.toFloat(),
+                    az = it.az.toFloat(),
+                    gx = it.gx.toFloat(),
+                    gy = it.gy.toFloat(),
+                    gz = it.gz.toFloat(),
+                    roll = it.roll.toFloat(),
+                    pitch = it.pitch.toFloat(),
+                    yaw = it.yaw.toFloat()
+                )
+            }
+            ai.symly.Recording(
+                id = rec.id,
+                gestureId = rec.gestureId,
+                timestamp = rec.timestamp,
+                durationMs = rec.durationMs,
+                paddingMs = rec.paddingMs,
+                samples = samples,
+                sourceCaptureId = rec.sourceCaptureId,
+                sampleSetId = rec.sampleSetId,
+                offsetMs = rec.offsetMs
+            )
+        }
+    }
+    
+    suspend fun deleteRecording(id: String) = withContext(Dispatchers.IO) {
+        queries.deleteSamplesByRecording(id)
+        queries.deleteRecording(id)
+    }
+    
+    suspend fun saveContinuousCapture(capture: ai.symly.ContinuousCapture) = withContext(Dispatchers.IO) {
+        queries.insertContinuousCapture(
+            id = capture.id,
+            gestureId = capture.gestureId,
+            timestamp = capture.timestamp,
+            durationMs = capture.durationMs
+        )
+        
+        capture.samples.forEachIndexed { index, sample ->
+            queries.insertContinuousCaptureSample(
+                captureId = capture.id,
+                sequence = index.toLong(),
+                ax = sample.ax.toDouble(),
+                ay = sample.ay.toDouble(),
+                az = sample.az.toDouble(),
+                gx = sample.gx.toDouble(),
+                gy = sample.gy.toDouble(),
+                gz = sample.gz.toDouble(),
+                roll = sample.roll.toDouble(),
+                pitch = sample.pitch.toDouble(),
+                yaw = sample.yaw.toDouble()
+            )
+        }
+    }
+    
+    suspend fun getContinuousCapturesByGesture(gestureId: String): List<ai.symly.ContinuousCapture> = withContext(Dispatchers.IO) {
+        val captures = queries.selectContinuousCapturesByGesture(gestureId).executeAsList()
+        captures.map { cap ->
+            val samples = queries.selectContinuousCaptureSamples(cap.id).executeAsList().map {
+                ai.symly.ImuSample(
+                    ax = it.ax.toFloat(),
+                    ay = it.ay.toFloat(),
+                    az = it.az.toFloat(),
+                    gx = it.gx.toFloat(),
+                    gy = it.gy.toFloat(),
+                    gz = it.gz.toFloat(),
+                    roll = it.roll.toFloat(),
+                    pitch = it.pitch.toFloat(),
+                    yaw = it.yaw.toFloat()
+                )
+            }
+            ai.symly.ContinuousCapture(
+                id = cap.id,
+                gestureId = cap.gestureId,
+                timestamp = cap.timestamp,
+                durationMs = cap.durationMs,
+                samples = samples
+            )
+        }
+    }
+    
+    suspend fun deleteContinuousCapture(id: String) = withContext(Dispatchers.IO) {
+        queries.deleteContinuousCaptureSamples(id)
+        queries.deleteContinuousCapture(id)
+    }
+    
+    suspend fun saveSampleSet(sampleSet: ai.symly.SampleSet) = withContext(Dispatchers.IO) {
+        queries.insertSampleSet(
+            id = sampleSet.id,
+            gestureId = sampleSet.gestureId,
+            sourceCaptureId = sampleSet.sourceCaptureId,
+            timestamp = sampleSet.timestamp,
+            strategy = sampleSet.strategy.name,
+            sampleMs = sampleSet.sampleMs,
+            paddingMs = sampleSet.paddingMs,
+            stepMs = sampleSet.stepMs,
+            randomCount = sampleSet.randomCount?.toLong()
+        )
+        
+        sampleSet.samples.forEach { recording ->
+            saveRecording(recording)
+        }
+    }
+    
+    suspend fun getSampleSetsByGesture(gestureId: String): List<ai.symly.SampleSet> = withContext(Dispatchers.IO) {
+        val sets = queries.selectSampleSetsByGesture(gestureId).executeAsList()
+        sets.map { set ->
+            val recordings = getRecordingsByGesture(gestureId)
+                .filter { it.sampleSetId == set.id }
+            ai.symly.SampleSet(
+                id = set.id,
+                gestureId = set.gestureId,
+                sourceCaptureId = set.sourceCaptureId,
+                timestamp = set.timestamp,
+                strategy = ai.symly.SampleStrategy.valueOf(set.strategy),
+                sampleMs = set.sampleMs,
+                paddingMs = set.paddingMs,
+                stepMs = set.stepMs,
+                randomCount = set.randomCount?.toInt(),
+                samples = recordings
+            )
+        }
+    }
+    
+    suspend fun deleteSampleSet(id: String) = withContext(Dispatchers.IO) {
+        val recordings = queries.selectRecordingsByGesture("").executeAsList()
+            .filter { it.sampleSetId == id }
+        recordings.forEach { deleteRecording(it.id) }
+        queries.deleteSampleSet(id)
+    }
+}

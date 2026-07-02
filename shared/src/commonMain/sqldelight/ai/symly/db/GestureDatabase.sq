@@ -1,0 +1,155 @@
+-- Gestures table
+CREATE TABLE IF NOT EXISTS Gesture (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    recordMode TEXT NOT NULL
+);
+
+-- Recordings table
+CREATE TABLE IF NOT EXISTS Recording (
+    id TEXT NOT NULL PRIMARY KEY,
+    gestureId TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    durationMs INTEGER NOT NULL,
+    paddingMs INTEGER NOT NULL,
+    sourceCaptureId TEXT,
+    sampleSetId TEXT,
+    offsetMs INTEGER,
+    FOREIGN KEY (gestureId) REFERENCES Gesture(id) ON DELETE CASCADE
+);
+
+-- IMU Samples table
+CREATE TABLE IF NOT EXISTS ImuSample (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recordingId TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    ax REAL NOT NULL,
+    ay REAL NOT NULL,
+    az REAL NOT NULL,
+    gx REAL NOT NULL,
+    gy REAL NOT NULL,
+    gz REAL NOT NULL,
+    roll REAL NOT NULL,
+    pitch REAL NOT NULL,
+    yaw REAL NOT NULL,
+    FOREIGN KEY (recordingId) REFERENCES Recording(id) ON DELETE CASCADE
+);
+
+-- Continuous Captures table
+CREATE TABLE IF NOT EXISTS ContinuousCapture (
+    id TEXT NOT NULL PRIMARY KEY,
+    gestureId TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    durationMs INTEGER NOT NULL,
+    FOREIGN KEY (gestureId) REFERENCES Gesture(id) ON DELETE CASCADE
+);
+
+-- Continuous Capture Samples table
+CREATE TABLE IF NOT EXISTS ContinuousCaptureSample (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    captureId TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    ax REAL NOT NULL,
+    ay REAL NOT NULL,
+    az REAL NOT NULL,
+    gx REAL NOT NULL,
+    gy REAL NOT NULL,
+    gz REAL NOT NULL,
+    roll REAL NOT NULL,
+    pitch REAL NOT NULL,
+    yaw REAL NOT NULL,
+    FOREIGN KEY (captureId) REFERENCES ContinuousCapture(id) ON DELETE CASCADE
+);
+
+-- Sample Sets table
+CREATE TABLE IF NOT EXISTS SampleSet (
+    id TEXT NOT NULL PRIMARY KEY,
+    gestureId TEXT NOT NULL,
+    sourceCaptureId TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    strategy TEXT NOT NULL,
+    sampleMs INTEGER NOT NULL,
+    paddingMs INTEGER NOT NULL,
+    stepMs INTEGER,
+    randomCount INTEGER,
+    FOREIGN KEY (gestureId) REFERENCES Gesture(id) ON DELETE CASCADE,
+    FOREIGN KEY (sourceCaptureId) REFERENCES ContinuousCapture(id) ON DELETE CASCADE
+);
+
+-- Queries for Gesture
+insertGesture:
+INSERT OR REPLACE INTO Gesture(id, name, recordMode)
+VALUES (?, ?, ?);
+
+selectAllGestures:
+SELECT * FROM Gesture ORDER BY name;
+
+selectGestureById:
+SELECT * FROM Gesture WHERE id = ?;
+
+deleteGesture:
+DELETE FROM Gesture WHERE id = ?;
+
+-- Queries for Recording
+insertRecording:
+INSERT OR REPLACE INTO Recording(id, gestureId, timestamp, durationMs, paddingMs, sourceCaptureId, sampleSetId, offsetMs)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+selectRecordingsByGesture:
+SELECT * FROM Recording WHERE gestureId = ? ORDER BY timestamp DESC;
+
+selectRecordingById:
+SELECT * FROM Recording WHERE id = ?;
+
+deleteRecording:
+DELETE FROM Recording WHERE id = ?;
+
+-- Queries for ImuSample
+insertImuSample:
+INSERT INTO ImuSample(recordingId, sequence, ax, ay, az, gx, gy, gz, roll, pitch, yaw)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectSamplesByRecording:
+SELECT * FROM ImuSample WHERE recordingId = ? ORDER BY sequence;
+
+deleteSamplesByRecording:
+DELETE FROM ImuSample WHERE recordingId = ?;
+
+-- Queries for ContinuousCapture
+insertContinuousCapture:
+INSERT OR REPLACE INTO ContinuousCapture(id, gestureId, timestamp, durationMs)
+VALUES (?, ?, ?, ?);
+
+selectContinuousCapturesByGesture:
+SELECT * FROM ContinuousCapture WHERE gestureId = ? ORDER BY timestamp DESC;
+
+selectContinuousCaptureById:
+SELECT * FROM ContinuousCapture WHERE id = ?;
+
+deleteContinuousCapture:
+DELETE FROM ContinuousCapture WHERE id = ?;
+
+-- Queries for ContinuousCaptureSample
+insertContinuousCaptureSample:
+INSERT INTO ContinuousCaptureSample(captureId, sequence, ax, ay, az, gx, gy, gz, roll, pitch, yaw)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectContinuousCaptureSamples:
+SELECT * FROM ContinuousCaptureSample WHERE captureId = ? ORDER BY sequence;
+
+deleteContinuousCaptureSamples:
+DELETE FROM ContinuousCaptureSample WHERE captureId = ?;
+
+-- Queries for SampleSet
+insertSampleSet:
+INSERT OR REPLACE INTO SampleSet(id, gestureId, sourceCaptureId, timestamp, strategy, sampleMs, paddingMs, stepMs, randomCount)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectSampleSetsByGesture:
+SELECT * FROM SampleSet WHERE gestureId = ? ORDER BY timestamp DESC;
+
+selectSampleSetById:
+SELECT * FROM SampleSet WHERE id = ?;
+
+deleteSampleSet:
+DELETE FROM SampleSet WHERE id = ?;
