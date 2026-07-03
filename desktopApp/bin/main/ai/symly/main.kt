@@ -4,9 +4,12 @@ import ai.symly.db.DatabaseManager
 import ai.symly.db.DriverFactory
 import ai.symly.db.GestureDatabase
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.window.MenuBar
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -83,6 +86,7 @@ fun main() = application {
     Window(
         onCloseRequest = ::exitApplication,
         title = "Gesture Recording Studio" + (currentProjectPath?.let { " - ${File(it).name}" } ?: ""),
+        state = rememberWindowState(position = WindowPosition(Alignment.Center))
     ) {
         MenuBar {
             Menu("File") {

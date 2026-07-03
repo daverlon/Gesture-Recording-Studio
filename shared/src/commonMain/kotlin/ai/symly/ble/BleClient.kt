@@ -94,7 +94,6 @@ class BleClient {
                 )
                 println("BleClient: observing $UART_TX_CHARACTERISTIC_UUID")
                 p.observe(characteristic).collect { chunk ->
-                    println("BleClient: rx ${chunk.size} bytes")
                     feedImuRxBuffer(chunk).forEach { _imuSamples.emit(it) }
                 }
                 println("BleClient: observe completed")
@@ -153,42 +152,25 @@ class BleClient {
 
     private fun feedImuRxBuffer(chunk: ByteArray): List<ImuSample> {
         if (chunk.isEmpty()) return emptyList()
+        
         imuRxBuffer += chunk
         val samples = mutableListOf<ImuSample>()
 
-        while (imuRxBuffer.size >= IMU_FRAME_BYTES) {
-            val syncAt = imuRxBuffer.indexOfSyncMarker()
-            when {
-                syncAt < 0 -> {
-                    // No sync marker — keep the last byte in case it's the start of one
-                    imuRxBuffer = if (imuRxBuffer.lastOrNull() == IMU_SYNC_BYTE_0)
-                        byteArrayOf(IMU_SYNC_BYTE_0) else ByteArray(0)
-                    break
-                }
-                syncAt > 0 -> {
-                    imuRxBuffer = imuRxBuffer.copyOfRange(syncAt, imuRxBuffer.size)
-                    continue
-                }
-                imuRxBuffer.size < IMU_FRAME_BYTES -> break
-                else -> {
-                    val payload = imuRxBuffer.copyOfRange(2, IMU_FRAME_BYTES)
-                    val sample = parseImuBinaryFrameOrNull(payload)
-                    if (sample != null) samples.add(sample)
-                    imuRxBuffer = imuRxBuffer.copyOfRange(IMU_FRAME_BYTES, imuRxBuffer.size)
-                }
+        while (imuRxBuffer.size >= IMU_PAYLOAD_BYTES) {
+            val payload = imuRxBuffer.copyOfRange(0, IMU_PAYLOAD_BYTES)
+            imuRxBuffer = imuRxBuffer.copyOfRange(IMU_PAYLOAD_BYTES, imuRxBuffer.size)
+            
+            val sample = parseImuBinaryFrameOrNull(payload)
+            if (sample != null) {
+                samples.add(sample)
             }
         }
 
-        if (imuRxBuffer.size > IMU_FRAME_BYTES * 10) imuRxBuffer = ByteArray(0)
+        if (imuRxBuffer.size > 500) imuRxBuffer = ByteArray(0)
+        
         return samples
     }
 
-    private fun ByteArray.indexOfSyncMarker(): Int {
-        for (i in 0 until size - 1) {
-            if (this[i] == IMU_SYNC_BYTE_0 && this[i + 1] == IMU_SYNC_BYTE_1) return i
-        }
-        return -1
-    }
 
     private companion object {
         const val SCAN_UI_REFRESH_MS = 500L
