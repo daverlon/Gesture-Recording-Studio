@@ -48,12 +48,24 @@ class BleClient {
             launch {
                 scanner.advertisements.collect { advertisement ->
                     val id = advertisement.identifier.toString()
-                    advertisements[id] = advertisement
-                    devices[id] = BleDevice(
-                        id = id,
-                        name = advertisement.name?.takeIf { it.isNotBlank() } ?: "Unknown device",
-                        rssi = advertisement.rssi
-                    )
+                    val deviceName = advertisement.name?.takeIf { it.isNotBlank() } ?: "Unknown device"
+                    
+                    // Filter by manufacturer data with company ID 0xFFFF and "SY" marker
+                    // manufacturerData(code) returns ByteArray without the company ID prefix
+                    val mfgData = advertisement.manufacturerData(0xFFFF)
+                    val hasSymlyMarker = mfgData != null && 
+                        mfgData.size >= 2 && 
+                        mfgData[0] == 0x53.toByte() && 
+                        mfgData[1] == 0x59.toByte()
+                    
+                    if (hasSymlyMarker) {
+                        advertisements[id] = advertisement
+                        devices[id] = BleDevice(
+                            id = id,
+                            name = deviceName,
+                            rssi = advertisement.rssi
+                        )
+                    }
                 }
             }
             while (isActive) {
@@ -153,9 +165,12 @@ class BleClient {
     private fun feedImuRxBuffer(chunk: ByteArray): List<ImuSample> {
         if (chunk.isEmpty()) return emptyList()
         
+        // Accumulate incoming bytes (may arrive in batches)
         imuRxBuffer += chunk
         val samples = mutableListOf<ImuSample>()
 
+        // Extract all complete 40-byte samples from buffer
+        // Device sends batches of 5 samples (200 bytes) every 50ms
         while (imuRxBuffer.size >= IMU_PAYLOAD_BYTES) {
             val payload = imuRxBuffer.copyOfRange(0, IMU_PAYLOAD_BYTES)
             imuRxBuffer = imuRxBuffer.copyOfRange(IMU_PAYLOAD_BYTES, imuRxBuffer.size)

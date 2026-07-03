@@ -5,6 +5,9 @@ import ai.symly.ble.BleDevicePickerDialog
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.defaultScrollbarStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
@@ -54,7 +59,7 @@ import kotlin.random.Random
 // ---------------------------------------------------------------------------
 
 private val AppFont = FontFamily.SansSerif
-private const val SAMPLE_INTERVAL_MS = 20L // 50 Hz
+private const val SAMPLE_INTERVAL_MS = 10L // 100 Hz data rate (batched: 5 samples sent every 50ms over BLE)
 private const val UI_TICK_MS = 16L // ~60 fps progress updates
 private const val COUNTDOWN_MS = 3000L
 
@@ -99,7 +104,8 @@ data class Gesture(
 data class ImuSample(
     val ax: Float, val ay: Float, val az: Float,
     val gx: Float, val gy: Float, val gz: Float,
-    val roll: Float, val pitch: Float, val yaw: Float
+    val roll: Float, val pitch: Float, val yaw: Float,
+    val timestampMs: Long = 0L // Device timestamp in milliseconds
 )
 
 private fun formatImuLogLine(sample: ImuSample): String {
@@ -107,7 +113,8 @@ private fun formatImuLogLine(sample: ImuSample): String {
         val rounded = (x * 100).toInt() / 100f
         val text = rounded.toString()
         val dot = text.indexOf('.')
-        return if (dot < 0) "$text.00" else text.padEnd(dot + 3, '0').take(dot + 3)
+        val formatted = if (dot < 0) "$text.00" else text.padEnd(dot + 3, '0').take(dot + 3)
+        return formatted.padStart(7)
     }
     return "gX:${v(sample.gx)} gY:${v(sample.gy)} gZ:${v(sample.gz)} " +
         "aX:${v(sample.ax)} aY:${v(sample.ay)} aZ:${v(sample.az)} " +
@@ -167,6 +174,11 @@ fun sliceCapture(
     val count = (windowMs / SAMPLE_INTERVAL_MS).toInt().coerceAtLeast(1)
     val endIdx = (startIdx + count).coerceAtMost(capture.samples.size)
     if (endIdx <= startIdx) return null
+    
+    // Ensure we have exactly the expected number of samples for consistent duration
+    val actualCount = endIdx - startIdx
+    if (actualCount != count) return null
+    
     return Recording(
         gestureId = capture.gestureId,
         timestamp = capture.timestamp + startMs,
@@ -229,10 +241,8 @@ fun extractRandomClips(
     val maxStart = capture.durationMs - windowMs
     if (maxStart < 0) return emptyList()
     val rnd = Random(capture.id.hashCode())
-    val starts = mutableSetOf<Long>()
-    var attempts = 0
-    while (starts.size < count && attempts < count * 20) {
-        attempts++
+    val starts = mutableListOf<Long>()
+    repeat(count) {
         val start = if (maxStart == 0L) 0L else rnd.nextLong(maxStart + 1)
         starts.add(start - (start % SAMPLE_INTERVAL_MS))
     }
@@ -280,11 +290,15 @@ fun extractSamplesFromCapture(
 // Root composable
 // ---------------------------------------------------------------------------
 
+expect fun playBeep()
+
 @Composable
 @Preview
 fun App(
     databaseManager: ai.symly.db.DatabaseManager? = null,
-    onStatusUpdate: ((String) -> Unit)? = null
+    onStatusUpdate: ((String) -> Unit)? = null,
+    onRequestStop: (() -> Boolean)? = null,
+    countdownSeconds: Int = 3
 ) {
     var gestures by remember { mutableStateOf(listOf<Gesture>()) }
     var recordings by remember { mutableStateOf(listOf<Recording>()) }
@@ -295,7 +309,11 @@ fun App(
     var recordedSamples by remember { mutableStateOf(listOf<ImuSample>()) }
     var liveDataLogs by remember { mutableStateOf(listOf<String>()) }
     var liveMessageCount by remember { mutableStateOf(0) }
+    var liveSamplesPerSecond by remember { mutableStateOf(0) }
     var liveDataEnabled by remember { mutableStateOf(false) }
+    
+    // Track sample timestamps for rate calculation
+    val sampleTimestamps = remember { mutableListOf<Long>() }
     var sessionStoppedByUser by remember { mutableStateOf(false) }
 
     var bleStatus by remember { mutableStateOf(BleStatus.DISCONNECTED) }
@@ -376,6 +394,8 @@ fun App(
         liveDataEnabled = false
         liveDataLogs = emptyList()
         liveMessageCount = 0
+        liveSamplesPerSecond = 0
+        sampleTimestamps.clear()
         isSessionActive = false
         sessionPhase = SessionPhase.IDLE
         sessionStoppedByUser = false
@@ -386,11 +406,19 @@ fun App(
         val client = bleClient ?: return@LaunchedEffect
         client.imuSamples.collect { sample ->
             recordedSamples = recordedSamples + sample
-            if (recordedSamples.size > 1000) {
+            // Only trim recordedSamples when not actively recording to avoid invalidating the startSampleCount reference
+            if (!isSessionActive && recordedSamples.size > 1000) {
                 recordedSamples = recordedSamples.takeLast(1000)
             }
             liveDataLogs = (liveDataLogs + formatImuLogLine(sample)).takeLast(LIVE_LOG_BUFFER)
             liveMessageCount++
+            
+            // Track sample rate (samples per second)
+            val now = nowMs()
+            sampleTimestamps.add(now)
+            // Keep only last second of timestamps
+            sampleTimestamps.removeAll { now - it > 1000 }
+            liveSamplesPerSecond = sampleTimestamps.size
         }
     }
 
@@ -414,9 +442,15 @@ fun App(
             sessionPhase = SessionPhase.CORE
             phaseElapsedMs = 0
             phaseTargetMs = 0
-            updateStatus("Recording '$gestureName'...")
+            updateStatus("Recording '$gestureName'... (Press SPACE to stop)")
             val startSampleCount = recordedSamples.size
             while (isSessionActive) {
+                // Check for space bar stop request
+                if (onRequestStop?.invoke() == true) {
+                    sessionStoppedByUser = true
+                    isSessionActive = false
+                    break
+                }
                 delay(UI_TICK_MS)
                 phaseElapsedMs += UI_TICK_MS
             }
@@ -428,16 +462,22 @@ fun App(
                         else "No sensor data received"
                     )
                 } else {
+                    // Calculate duration based on actual timestamps
+                    val actualDurationMs = if (capturedSamples.size > 1) {
+                        (capturedSamples.last().timestampMs - capturedSamples.first().timestampMs)
+                    } else {
+                        0L
+                    }
                     val capture = ContinuousCapture(
                         gestureId = gid,
-                        durationMs = phaseElapsedMs,
+                        durationMs = actualDurationMs,
                         samples = capturedSamples
                     )
                     continuousCaptures = continuousCaptures + capture
                     databaseManager?.saveContinuousCapture(capture)
                     updateStatus(
                         if (sessionStoppedByUser) "Stopped recording"
-                        else "Saved ${phaseElapsedMs}ms recording for '$gestureName'"
+                        else "Saved ${actualDurationMs}ms recording for '$gestureName'"
                     )
                 }
             } else if (sessionStoppedByUser) {
@@ -453,6 +493,12 @@ fun App(
         suspend fun tickPhase(targetMs: Long, onTick: (Long) -> Unit): Boolean {
             var elapsed = 0L
             while (elapsed < targetMs) {
+                // Check for space bar stop request
+                if (onRequestStop?.invoke() == true) {
+                    sessionStoppedByUser = true
+                    isSessionActive = false
+                    return false
+                }
                 if (!isSessionActive) return false
                 delay(UI_TICK_MS)
                 elapsed = (elapsed + UI_TICK_MS).coerceAtMost(targetMs)
@@ -470,22 +516,53 @@ fun App(
                 break
             }
 
+            val countdownMs = countdownSeconds * 1000L
             sessionPhase = SessionPhase.COUNTDOWN
-            phaseTargetMs = COUNTDOWN_MS
+            phaseTargetMs = countdownMs
             phaseElapsedMs = 0
-            updateStatus("Next recording in 3...")
-            if (!tickPhase(COUNTDOWN_MS) { elapsed ->
+            countdownValue = countdownSeconds
+            updateStatus("Next recording in $countdownSeconds... (Press SPACE to stop)")
+            playBeep() // Initial beep
+            var lastBeepValue = countdownSeconds
+            if (!tickPhase(countdownMs) { elapsed ->
                 phaseElapsedMs = elapsed
-                countdownValue = ((COUNTDOWN_MS - elapsed + 999) / 1000).toInt().coerceAtLeast(1)
-                updateStatus("Next recording in $countdownValue...")
+                val newCountdown = ((countdownMs - elapsed + 999) / 1000).toInt().coerceAtLeast(1)
+                if (newCountdown != countdownValue) {
+                    playBeep()
+                    countdownValue = newCountdown
+                    updateStatus("Next recording in $countdownValue... (Press SPACE to stop)")
+                }
             }) break
 
             sessionPhase = SessionPhase.CORE
             phaseTargetMs = coreMs
             phaseElapsedMs = 0
-            updateStatus("Recording '$gestureName'...")
+            updateStatus("Recording '$gestureName'... (Press SPACE to stop)")
 
-            val startSampleCount = recordedSamples.size
+            // Wait for a fresh batch to arrive, then use its timestamp as recording start
+            if (recordedSamples.isEmpty()) {
+                updateStatus("Waiting for sensor data...")
+                delay(200) // Wait for first samples
+                if (recordedSamples.isEmpty()) {
+                    updateStatus("No sensor data received")
+                    break
+                }
+            }
+            
+            // Wait for a fresh batch (25-50ms) to ensure we're starting with current data
+            val samplesBefore = recordedSamples.size
+            delay(50)
+            
+            // Use the first NEW sample as the recording start
+            val recordingStartTimestamp = if (recordedSamples.size > samplesBefore) {
+                recordedSamples[samplesBefore].timestampMs
+            } else {
+                recordedSamples.last().timestampMs
+            }
+            
+            val totalMs = padMs + coreMs + padMs
+            val recordingEndTimestamp = recordingStartTimestamp + totalMs
+            
             val displayMs = padMs + coreMs
             val totalCaptureMs = padMs + coreMs + padMs
             var captureElapsed = 0L
@@ -500,22 +577,47 @@ fun App(
                 }
             }
             if (!isSessionActive) break
+            
+            // Wait extra time for batched samples to arrive via BLE (batches sent every 25ms)
+            delay(100) // Buffer time for BLE transmission
 
-            val totalMs = padMs + coreMs + padMs
-            val capturedSamples = recordedSamples.drop(startSampleCount)
-            if (capturedSamples.isEmpty()) {
-                updateStatus("No sensor data received")
+            // Filter ALL samples by timestamp to get exact window
+            // This works correctly with batched data arriving at any time
+            val finalSamples = recordedSamples.filter { sample ->
+                sample.timestampMs >= recordingStartTimestamp && sample.timestampMs < recordingEndTimestamp
+            }
+            
+            if (finalSamples.isEmpty()) {
+                updateStatus("No samples in time window ($recordingStartTimestamp to $recordingEndTimestamp)")
                 break
             }
+            
+            // Debug: Check timestamp spacing
+            val actualDuration = if (finalSamples.size > 1) finalSamples.last().timestampMs - finalSamples.first().timestampMs else 0
+            val expectedSamples = (totalMs / SAMPLE_INTERVAL_MS).toInt()
+            
+            println("=== RECORDING DEBUG ===")
+            println("Expected samples: $expectedSamples (${totalMs}ms window)")
+            println("Actual samples: ${finalSamples.size}")
+            println("Actual duration: ${actualDuration}ms")
+            println("Timestamp window: $recordingStartTimestamp to $recordingEndTimestamp")
+            println("First sample timestamp: ${finalSamples.first().timestampMs}")
+            println("Last sample timestamp: ${finalSamples.last().timestampMs}")
+            if (finalSamples.size > 1) {
+                val avgInterval = actualDuration.toFloat() / (finalSamples.size - 1)
+                println("Average sample interval: ${avgInterval}ms (expected: ${SAMPLE_INTERVAL_MS}ms)")
+            }
+            println("======================")
+            
             val recording = Recording(
                 gestureId = gid,
                 durationMs = totalMs,
                 paddingMs = padMs,
-                samples = capturedSamples
+                samples = finalSamples
             )
             recordings = recordings + recording
             databaseManager?.saveRecording(recording)
-            updateStatus("Saved recording for '$gestureName'")
+            updateStatus("Saved recording for '$gestureName' (${finalSamples.size}/$expectedSamples samples, ${actualDuration}ms span)")
         }
         sessionPhase = SessionPhase.IDLE
         isSessionActive = false
@@ -541,12 +643,20 @@ fun App(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("GESTURES", style = Type.section)
-                    CompactIconButton(symbol = "+", onClick = { showAddDialog = true })
+                    CompactIconButton(
+                        symbol = "+", 
+                        onClick = { showAddDialog = true },
+                        enabled = databaseManager != null
+                    )
                 }
                 Divider()
 
                 if (gestures.isEmpty()) {
-                    Text("No gestures.", style = Type.label, modifier = Modifier.padding(10.dp))
+                    Text(
+                        if (databaseManager == null) "No project loaded.\nFile > New Project" else "No gestures.",
+                        style = Type.label,
+                        modifier = Modifier.padding(10.dp)
+                    )
                 }
 
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -578,6 +688,7 @@ fun App(
                     .sortedByDescending { it.timestamp },
                 continuousCaptures = continuousCaptures.filter { it.gestureId == selectedGestureId }
                     .sortedByDescending { it.timestamp },
+                hasDatabase = databaseManager != null,
                 bleConnected = bleStatus == BleStatus.CONNECTED,
                 recordMsInput = recordMsInput,
                 onRecordMsChange = { recordMsInput = it },
@@ -600,6 +711,8 @@ fun App(
                         isSessionActive = false
                         sessionPhase = SessionPhase.IDLE
                         updateStatus("Stopped recording")
+                    } else if (databaseManager == null) {
+                        updateStatus("Create or open a project first (File > New Project)")
                     } else if (bleStatus != BleStatus.CONNECTED) {
                         updateStatus("Connect device to record")
                     } else {
@@ -689,6 +802,7 @@ fun App(
             deviceName = deviceName,
             liveDataEnabled = liveDataEnabled,
             liveMessageCount = liveMessageCount,
+            liveSamplesPerSecond = liveSamplesPerSecond,
             liveSamples = recordedSamples,
             liveLogs = liveDataLogs,
             onLiveDataToggle = { liveDataEnabled = it },
@@ -748,7 +862,13 @@ fun App(
                     gestures = gestures + gesture
                     selectedGestureId = gesture.id
                     scope.launch {
-                        databaseManager?.saveGesture(gesture)
+                        try {
+                            databaseManager?.saveGesture(gesture)
+                            println("DEBUG: Saved gesture '$name' with id ${gesture.id}")
+                        } catch (e: Exception) {
+                            println("DEBUG: Error saving gesture: ${e.message}")
+                            e.printStackTrace()
+                        }
                     }
                     updateStatus("Added gesture '$name'")
                     showAddDialog = false
@@ -835,15 +955,16 @@ fun CompactButton(
 }
 
 @Composable
-fun CompactIconButton(symbol: String, onClick: () -> Unit, tint: Color = Color(0xFF777777)) {
+fun CompactIconButton(symbol: String, onClick: () -> Unit, tint: Color = Color(0xFF777777), enabled: Boolean = true) {
+    val actualTint = if (enabled) tint else Color(0xFFCCCCCC)
     Box(
         modifier = Modifier
             .size(18.dp)
             .clip(RoundedCornerShape(2.dp))
-            .compactClickable { onClick() },
+            .compactClickable(enabled = enabled) { if (enabled) onClick() },
         contentAlignment = Alignment.Center
     ) {
-        Text(symbol, style = TextStyle(fontFamily = AppFont, fontSize = 12.sp, color = tint))
+        Text(symbol, style = TextStyle(fontFamily = AppFont, fontSize = 12.sp, color = actualTint))
     }
 }
 
@@ -1081,9 +1202,24 @@ fun LiveDataLogPanel(
     val clipboard = LocalClipboardManager.current
     val listState = rememberLazyListState()
     val logText = logs.joinToString("\n")
+    var shouldAutoScroll by remember { mutableStateOf(true) }
 
+    // Track if user has manually scrolled
+    LaunchedEffect(listState.isScrollInProgress) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.isScrollInProgress }
+            .collect { (_, isScrolling) ->
+                if (isScrolling) {
+                    val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    val totalItems = listState.layoutInfo.totalItemsCount
+                    // User is at bottom if viewing last 2 items
+                    shouldAutoScroll = totalItems == 0 || lastVisibleIndex >= totalItems - 2
+                }
+            }
+    }
+
+    // Auto-scroll when new logs arrive
     LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
+        if (logs.isNotEmpty() && shouldAutoScroll) {
             listState.scrollToItem(logs.lastIndex)
         }
     }
@@ -1122,6 +1258,18 @@ fun LiveDataLogPanel(
                 }
             }
         }
+        
+        androidx.compose.foundation.VerticalScrollbar(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(8.dp),
+            adapter = rememberScrollbarAdapter(listState),
+            style = androidx.compose.foundation.defaultScrollbarStyle().copy(
+                unhoverColor = Color(0xFFD0D0D0),
+                hoverColor = Color(0xFFA0A0A0)
+            )
+        )
     }
 }
 
@@ -1132,6 +1280,7 @@ fun BottomStatusArea(
     deviceName: String?,
     liveDataEnabled: Boolean,
     liveMessageCount: Int,
+    liveSamplesPerSecond: Int,
     liveSamples: List<ImuSample>,
     liveLogs: List<String>,
     onLiveDataToggle: (Boolean) -> Unit,
@@ -1202,6 +1351,7 @@ fun BottomStatusArea(
             deviceName = deviceName,
             liveDataEnabled = liveDataEnabled,
             liveMessageCount = liveMessageCount,
+            liveSamplesPerSecond = liveSamplesPerSecond,
             onLiveDataToggle = onLiveDataToggle,
             onConnectClick = onConnectClick
         )
@@ -1215,6 +1365,7 @@ fun StatusBar(
     deviceName: String?,
     liveDataEnabled: Boolean,
     liveMessageCount: Int,
+    liveSamplesPerSecond: Int,
     onLiveDataToggle: (Boolean) -> Unit,
     onConnectClick: () -> Unit
 ) {
@@ -1235,6 +1386,11 @@ fun StatusBar(
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (bleStatus == BleStatus.CONNECTED) {
+                Text(
+                    text = "${liveSamplesPerSecond}Hz",
+                    style = Type.label.copy(color = Palette.muted)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = liveMessageCount.toString(),
                     style = Type.monoMedium,
@@ -1310,6 +1466,7 @@ fun RecordingsPanel(
     recordings: List<Recording>,
     sampleSets: List<SampleSet>,
     continuousCaptures: List<ContinuousCapture>,
+    hasDatabase: Boolean,
     bleConnected: Boolean,
     recordMsInput: String,
     onRecordMsChange: (String) -> Unit,
@@ -1413,7 +1570,7 @@ fun RecordingsPanel(
                         else -> "Start"
                     },
                     onClick = onToggleSession,
-                    enabled = isSessionActive || bleConnected,
+                    enabled = isSessionActive || (bleConnected && hasDatabase),
                     filled = isSessionActive,
                     accent = if (isSessionActive) Palette.danger else Palette.accent
                 )
@@ -1467,6 +1624,9 @@ fun RecordingsPanel(
                             onClick = { selectedCaptureId = capture.id },
                             onDelete = { onDeleteCapture(capture) }
                         )
+                        if (showPlots) {
+                            ImuPlot(samples = capture.samples, paddingMs = 0, modifier = Modifier.fillMaxWidth())
+                        }
                         Divider()
                     }
                 }
@@ -1482,7 +1642,7 @@ fun RecordingsPanel(
                     sampleCountInput = sampleCountInput,
                     onSampleCountChange = onSampleCountChange,
                     onSample = { selectedCapture?.let(onSampleCapture) },
-                    sampleEnabled = selectedCapture != null && !isSessionActive
+                    sampleEnabled = selectedCapture != null && !isSessionActive && hasDatabase
                 )
             }
             Divider()
@@ -1841,24 +2001,181 @@ fun ImuPlot(
     fillHeight: Boolean = false
 ) {
     if (samples.isEmpty()) return
-    val totalMs = (samples.size * SAMPLE_INTERVAL_MS).toFloat()
-    val preFrac = (paddingMs / totalMs).coerceIn(0f, 1f)
+    // Use actual timestamps if available, otherwise fall back to sample count
+    val totalMs = if (samples.size > 1 && samples.first().timestampMs > 0) {
+        (samples.last().timestampMs - samples.first().timestampMs).toFloat()
+    } else {
+        (samples.size * SAMPLE_INTERVAL_MS).toFloat()
+    }
+    val preFrac = if (totalMs > 0) (paddingMs / totalMs).coerceIn(0f, 1f) else 0f
     val postFrac = 1f - preFrac
-    val plotHeight = if (compact) 48.dp else 72.dp
+    
+    var hoverX by remember { mutableStateOf<Float?>(null) }
+    var hoverY by remember { mutableStateOf<Float?>(null) }
+    var canvasWidth by remember { mutableStateOf(0f) }
+
+    // Unwrap Euler angles to prevent jumps
+    fun unwrapAngles(values: List<Float>): List<Float> {
+        if (values.isEmpty()) return values
+        val unwrapped = mutableListOf(values[0])
+        var offset = 0f
+        for (i in 1 until values.size) {
+            val diff = values[i] - values[i - 1]
+            if (diff > 180f) offset -= 360f
+            else if (diff < -180f) offset += 360f
+            unwrapped.add(values[i] + offset)
+        }
+        return unwrapped
+    }
 
     Column(
         modifier = modifier
             .background(Palette.plotBg)
             .padding(horizontal = 10.dp, vertical = if (compact) 4.dp else 6.dp)
     ) {
-        val canvasModifier = if (fillHeight) {
-            Modifier.fillMaxWidth().weight(1f)
-        } else {
-            Modifier.fillMaxWidth().height(plotHeight)
+        // Gyro + Accel plot
+        ImuPlotCanvas(
+            samples = samples,
+            paddingMs = paddingMs,
+            preFrac = preFrac,
+            postFrac = postFrac,
+            hoverX = hoverX,
+            onHoverChange = { x, y ->
+                hoverX = x
+                hoverY = y
+            },
+            onCanvasWidthChange = { canvasWidth = it },
+            modifier = if (fillHeight) Modifier.fillMaxWidth().weight(0.5f) else Modifier.fillMaxWidth().height(36.dp),
+            drawContent = { w, h ->
+                // Scale series
+                val accelSeries = listOf(
+                    samples.map { (it.ax / 4f + 0.5f).coerceIn(0f, 1f) },
+                    samples.map { (it.ay / 4f + 0.5f).coerceIn(0f, 1f) },
+                    samples.map { (it.az / 4f + 0.5f).coerceIn(0f, 1f) }
+                )
+                val gyroSeries = listOf(
+                    samples.map { (it.gx / 1000f + 0.5f).coerceIn(0f, 1f) },
+                    samples.map { (it.gy / 1000f + 0.5f).coerceIn(0f, 1f) },
+                    samples.map { (it.gz / 1000f + 0.5f).coerceIn(0f, 1f) }
+                )
+                drawSeriesLines(accelSeries, AccelColors, w, h)
+                drawSeriesLines(gyroSeries, GyroColors, w, h)
+            }
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Palette.border)
+        )
+        
+        // Orientation plot
+        ImuPlotCanvas(
+            samples = samples,
+            paddingMs = paddingMs,
+            preFrac = preFrac,
+            postFrac = postFrac,
+            hoverX = hoverX,
+            onHoverChange = { x, y ->
+                hoverX = x
+                hoverY = y
+            },
+            onCanvasWidthChange = { canvasWidth = it },
+            modifier = if (fillHeight) Modifier.fillMaxWidth().weight(0.5f) else Modifier.fillMaxWidth().height(36.dp),
+            drawContent = { w, h ->
+                val rollUnwrapped = unwrapAngles(samples.map { it.roll })
+                val pitchUnwrapped = unwrapAngles(samples.map { it.pitch })
+                val yawUnwrapped = unwrapAngles(samples.map { it.yaw })
+                
+                val eulerMin = minOf(rollUnwrapped.min(), pitchUnwrapped.min(), yawUnwrapped.min())
+                val eulerMax = maxOf(rollUnwrapped.max(), pitchUnwrapped.max(), yawUnwrapped.max())
+                val eulerRange = (eulerMax - eulerMin).takeIf { it > 0.0001f } ?: 1f
+                
+                val eulerSeries = listOf(
+                    rollUnwrapped.map { ((it - eulerMin) / eulerRange).coerceIn(0f, 1f) },
+                    pitchUnwrapped.map { ((it - eulerMin) / eulerRange).coerceIn(0f, 1f) },
+                    yawUnwrapped.map { ((it - eulerMin) / eulerRange).coerceIn(0f, 1f) }
+                )
+                drawSeriesLines(eulerSeries, EulerColors, w, h)
+            }
+        )
+        
+        // Hover tooltip
+        if (hoverX != null && hoverY != null && canvasWidth > 0) {
+            val x = hoverX!!
+            val y = hoverY!!
+            val sampleIndex = ((x / canvasWidth) * samples.size).toInt().coerceIn(0, samples.lastIndex)
+            val sample = samples[sampleIndex]
+            
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(x.toInt() + 10, y.toInt() - 60)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .background(Color(0xF0FFFFFF), RoundedCornerShape(4.dp))
+                        .border(1.dp, Palette.border, RoundedCornerShape(4.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    fun v(x: Float) = "%.2f".format(x)
+                    Text("ax:${v(sample.ax)} ay:${v(sample.ay)} az:${v(sample.az)}", style = Type.monoSmall)
+                    Text("gx:${v(sample.gx)} gy:${v(sample.gy)} gz:${v(sample.gz)}", style = Type.monoSmall)
+                    Text("r:${v(sample.roll)} p:${v(sample.pitch)} y:${v(sample.yaw)}", style = Type.monoSmall)
+                }
+            }
         }
-        Canvas(modifier = canvasModifier) {
+        
+        if (!compact) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LegendItem("ax", AccelColors[0]); LegendItem("ay", AccelColors[1]); LegendItem("az", AccelColors[2])
+                LegendItem("gx", GyroColors[0]); LegendItem("gy", GyroColors[1]); LegendItem("gz", GyroColors[2])
+                LegendItem("roll", EulerColors[0]); LegendItem("pitch", EulerColors[1]); LegendItem("yaw", EulerColors[2])
+            }
+        }
+    }
+}
+
+@Composable
+fun ImuPlotCanvas(
+    samples: List<ImuSample>,
+    paddingMs: Long,
+    preFrac: Float,
+    postFrac: Float,
+    hoverX: Float?,
+    onHoverChange: (Float?, Float?) -> Unit,
+    onCanvasWidthChange: (Float) -> Unit,
+    modifier: Modifier,
+    drawContent: DrawScope.(Float, Float) -> Unit
+) {
+    val totalMs = (samples.size * SAMPLE_INTERVAL_MS).toFloat()
+    
+    Box(modifier = modifier
+        .pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    when (event.type) {
+                        PointerEventType.Move, PointerEventType.Enter -> {
+                            val position = event.changes.firstOrNull()?.position
+                            if (position != null) {
+                                onHoverChange(position.x, position.y)
+                            }
+                        }
+                        PointerEventType.Exit -> {
+                            onHoverChange(null, null)
+                        }
+                    }
+                }
+            }
+        }
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
             val w = size.width
             val h = size.height
+            onCanvasWidthChange(w)
             val preX = w * preFrac
             val postX = w * postFrac
 
@@ -1870,34 +2187,32 @@ fun ImuPlot(
                 drawLine(Color(0xFF999999), Offset(postX, 0f), Offset(postX, h), strokeWidth = 1f, pathEffect = dash)
             }
 
-            fun DrawScope.drawGroup(series: List<List<Float>>, colors: List<Color>) {
-                val all = series.flatten()
-                val minV = all.min()
-                val maxV = all.max()
-                val range = (maxV - minV).takeIf { it > 0.0001f } ?: 1f
-                series.forEachIndexed { ci, values ->
-                    val path = Path()
-                    values.forEachIndexed { i, v ->
-                        val x = w * i / (values.size - 1).coerceAtLeast(1)
-                        val norm = (v - minV) / range
-                        val y = h - norm * h
-                        if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                    }
-                    drawPath(path, color = colors[ci], style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round))
+            drawContent(w, h)
+            
+            // Draw hover crosshair
+            hoverX?.let { x ->
+                if (x >= 0 && x <= w) {
+                    drawLine(
+                        color = Color(0x88000000),
+                        start = Offset(x, 0f),
+                        end = Offset(x, h),
+                        strokeWidth = 1f
+                    )
                 }
             }
-            drawGroup(listOf(samples.map { it.ax }, samples.map { it.ay }, samples.map { it.az }), AccelColors)
-            drawGroup(listOf(samples.map { it.gx }, samples.map { it.gy }, samples.map { it.gz }), GyroColors)
-            drawGroup(listOf(samples.map { it.roll }, samples.map { it.pitch }, samples.map { it.yaw }), EulerColors)
         }
-        if (!compact) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                LegendItem("ax", AccelColors[0]); LegendItem("ay", AccelColors[1]); LegendItem("az", AccelColors[2])
-                LegendItem("gx", GyroColors[0]); LegendItem("gy", GyroColors[1]); LegendItem("gz", GyroColors[2])
-                LegendItem("roll", EulerColors[0]); LegendItem("pitch", EulerColors[1]); LegendItem("yaw", EulerColors[2])
-            }
+    }
+}
+
+fun DrawScope.drawSeriesLines(series: List<List<Float>>, colors: List<Color>, w: Float, h: Float) {
+    series.forEachIndexed { ci, values ->
+        val path = Path()
+        values.forEachIndexed { i, norm ->
+            val x = w * i / (values.size - 1).coerceAtLeast(1)
+            val y = h - norm * h
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
         }
+        drawPath(path, color = colors[ci], style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round))
     }
 }
 

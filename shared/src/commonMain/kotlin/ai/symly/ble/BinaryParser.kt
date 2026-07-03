@@ -13,4 +13,4 @@ fun parseImuBinaryFrameOrNull(data: ByteArray): ImuSample? {
     }
 }
 
-const val IMU_PAYLOAD_BYTES = 36
+const val IMU_PAYLOAD_BYTES = 40 // 4 bytes timestamp + 36 bytes sensor data

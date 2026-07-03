@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.sqldelight)
+    kotlin("plugin.serialization") version "2.1.0"
 }
 
 kotlin {
@@ -22,6 +23,7 @@ kotlin {
             implementation(libs.kotlinx.datetime)
             implementation(libs.kable.core)
             implementation(libs.sqldelight.coroutines)
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
         }
         jvmMain.dependencies {
             implementation(libs.sqldelight.driver.sqlite)
