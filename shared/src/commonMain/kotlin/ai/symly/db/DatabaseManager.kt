@@ -44,6 +44,7 @@ class DatabaseManager(private val database: GestureDatabase) {
     }
     
     suspend fun saveRecording(recording: ai.symly.Recording) = withContext(Dispatchers.IO) {
+        println("DEBUG DB saveRecording: id=${recording.id}, gestureId=${recording.gestureId}, sampleSetId=${recording.sampleSetId}, samples=${recording.samples.size}")
         queries.insertRecording(
             id = recording.id,
             gestureId = recording.gestureId,
@@ -74,7 +75,8 @@ class DatabaseManager(private val database: GestureDatabase) {
     
     suspend fun getRecordingsByGesture(gestureId: String): List<ai.symly.Recording> = withContext(Dispatchers.IO) {
         val recordings = queries.selectRecordingsByGesture(gestureId).executeAsList()
-        recordings.map { rec ->
+        println("DEBUG DB getRecordingsByGesture: gestureId=$gestureId, found ${recordings.size} recordings")
+        recordings.mapIndexed { index, rec ->
             val samples = queries.selectSamplesByRecording(rec.id).executeAsList().map {
                 ai.symly.ImuSample(
                     ax = it.ax.toFloat(),
@@ -87,6 +89,9 @@ class DatabaseManager(private val database: GestureDatabase) {
                     pitch = it.pitch.toFloat(),
                     yaw = it.yaw.toFloat()
                 )
+            }
+            if (index < 5 || rec.sampleSetId != null) {
+                println("DEBUG DB   recording[$index]: id=${rec.id}, sampleSetId=${rec.sampleSetId}")
             }
             ai.symly.Recording(
                 id = rec.id,
@@ -164,6 +169,7 @@ class DatabaseManager(private val database: GestureDatabase) {
     }
     
     suspend fun saveSampleSet(sampleSet: ai.symly.SampleSet) = withContext(Dispatchers.IO) {
+        println("DEBUG DB: Saving sample set ${sampleSet.id} with ${sampleSet.samples.size} recordings")
         queries.insertSampleSet(
             id = sampleSet.id,
             gestureId = sampleSet.gestureId,
@@ -176,16 +182,24 @@ class DatabaseManager(private val database: GestureDatabase) {
             randomCount = sampleSet.randomCount?.toLong()
         )
         
-        sampleSet.samples.forEach { recording ->
+        sampleSet.samples.forEachIndexed { index, recording ->
+            println("DEBUG DB: Saving recording ${recording.id} (${index + 1}/${sampleSet.samples.size}) with sampleSetId=${recording.sampleSetId}, ${recording.samples.size} samples")
             saveRecording(recording)
         }
+        println("DEBUG DB: Finished saving sample set")
     }
     
     suspend fun getSampleSetsByGesture(gestureId: String): List<ai.symly.SampleSet> = withContext(Dispatchers.IO) {
         val sets = queries.selectSampleSetsByGesture(gestureId).executeAsList()
+        println("DEBUG DB: Found ${sets.size} sample sets for gesture $gestureId")
         sets.map { set ->
-            val recordings = getRecordingsByGesture(gestureId)
-                .filter { it.sampleSetId == set.id }
+            val allRecordings = getRecordingsByGesture(gestureId)
+            println("DEBUG DB: Sample set ${set.id} - total recordings for gesture: ${allRecordings.size}")
+            val recordings = allRecordings.filter { it.sampleSetId == set.id }
+            println("DEBUG DB: Sample set ${set.id} - filtered recordings with matching sampleSetId: ${recordings.size}")
+            recordings.forEach { rec ->
+                println("DEBUG DB:   - Recording ${rec.id}: sampleSetId=${rec.sampleSetId}, ${rec.samples.size} samples")
+            }
             ai.symly.SampleSet(
                 id = set.id,
                 gestureId = set.gestureId,

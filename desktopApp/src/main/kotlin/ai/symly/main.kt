@@ -296,6 +296,7 @@ fun main() = application {
                 
                 // Export sample sets
                 val sampleSets = db.getSampleSetsByGesture(gesture.id)
+                println("DEBUG: Gesture ${gesture.name} has ${sampleSets.size} sample sets")
                 if (sampleSets.isNotEmpty()) {
                     val setsDir = File(gestureDir, "sample_sets")
                     setsDir.mkdirs()
@@ -304,6 +305,7 @@ fun main() = application {
                         val setName = "${sampleSet.strategy.name.lowercase()}_${(setIndex + 1).toString().padStart(3, '0')}"
                         val setDir = File(setsDir, setName)
                         setDir.mkdirs()
+                        println("DEBUG: Sample set ${setName} has ${sampleSet.samples.size} samples")
                         
                         // Write info file
                         File(setDir, "info.txt").writeText(buildSampleSetInfo(sampleSet))

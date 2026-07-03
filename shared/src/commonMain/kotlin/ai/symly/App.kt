@@ -198,10 +198,13 @@ fun buildSampleSet(
     stepMs: Long,
     randomCount: Int
 ): SampleSet? {
+    println("DEBUG: buildSampleSet - capture has ${capture.samples.size} samples, durationMs=${capture.durationMs}")
     val extracted = extractSamplesFromCapture(capture, sampleMs, padMs, strategy, stepMs, randomCount)
+    println("DEBUG: extractSamplesFromCapture returned ${extracted.size} samples")
     if (extracted.isEmpty()) return null
     val setId = newId()
     return SampleSet(
+        id = setId,
         gestureId = capture.gestureId,
         sourceCaptureId = capture.id,
         strategy = strategy,
@@ -726,6 +729,7 @@ fun App(
                     val padMs = padMsInput.toLongOrNull()
                     val stepMs = sampleStepMsInput.toLongOrNull()
                     val randomCount = sampleCountInput.toIntOrNull()
+                    println("DEBUG: Sample request - capture.durationMs=${capture.durationMs}, sampleMs=$sampleMs, padMs=$padMs, strategy=$sampleStrategy, stepMs=$stepMs, randomCount=$randomCount")
                     when {
                         sampleMs == null || sampleMs <= 0 || padMs == null || padMs < 0 ->
                             updateStatus("Invalid sample configuration")
@@ -742,12 +746,14 @@ fun App(
                                 stepMs = stepMs ?: 0,
                                 randomCount = randomCount ?: 0
                             )
+                            println("DEBUG: buildSampleSet returned: ${if (set == null) "null" else "set with ${set.samples.size} samples"}")
                             if (set == null) {
                                 updateStatus("No samples fit in recording")
                             } else {
                                 sampleSets = sampleSets + set
                                 scope.launch {
                                     databaseManager?.saveSampleSet(set)
+                                    println("DEBUG: Saved sample set to database")
                                 }
                                 updateStatus("Created sample set (${set.samples.size} samples)")
                             }
