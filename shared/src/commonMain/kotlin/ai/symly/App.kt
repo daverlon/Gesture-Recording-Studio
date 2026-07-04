@@ -537,6 +537,7 @@ fun App(
                 }
             }) break
 
+            playBeep() // Beep when recording starts
             sessionPhase = SessionPhase.CORE
             phaseTargetMs = coreMs
             phaseElapsedMs = 0
