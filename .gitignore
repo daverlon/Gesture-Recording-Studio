@@ -3,7 +3,9 @@
 **/.gradle/
 build/
 **/build/
-!gradle/wrapper/gradle-wrapper.jar
+
+# Wrapper jar is generated locally; gradle-wrapper.properties + gradlew are enough to regenerate
+gradle/wrapper/gradle-wrapper.jar
 
 # Kotlin
 .kotlin/
@@ -37,7 +39,6 @@ Thumbs.db
 # Compiled / packaged
 *.class
 *.jar
-!gradle/wrapper/gradle-wrapper.jar
 *.war
 *.nar
 *.ear
