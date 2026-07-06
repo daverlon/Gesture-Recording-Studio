@@ -46,6 +46,7 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
@@ -125,15 +126,16 @@ data class Recording(
     val id: String = newId(),
     val gestureId: String,
     val timestamp: Long = nowMs(),
-    val durationMs: Long,   // total capture span, including leading/trailing padding
-    val paddingMs: Long,    // padding applied on each side
+    val durationMs: Long,   // total capture span: pre + core + post
+    val prePaddingMs: Long,
+    val postPaddingMs: Long,
     val samples: List<ImuSample>,
     val sourceCaptureId: String? = null,
     val sampleSetId: String? = null,
     val offsetMs: Long? = null
 ) {
     val sampleCount: Int get() = samples.size
-    val coreMs: Long get() = (durationMs - 2 * paddingMs).coerceAtLeast(0)
+    val coreMs: Long get() = (durationMs - prePaddingMs - postPaddingMs).coerceAtLeast(0)
 }
 
 data class SampleSet(
@@ -143,7 +145,8 @@ data class SampleSet(
     val timestamp: Long = nowMs(),
     val strategy: SampleStrategy,
     val sampleMs: Long,
-    val paddingMs: Long,
+    val prePaddingMs: Long,
+    val postPaddingMs: Long,
     val stepMs: Long? = null,
     val randomCount: Int? = null,
     val samples: List<Recording>
@@ -166,9 +169,10 @@ fun sliceCapture(
     capture: ContinuousCapture,
     startMs: Long,
     clipMs: Long,
-    padMs: Long
+    prePadMs: Long,
+    postPadMs: Long
 ): Recording? {
-    val windowMs = padMs + clipMs + padMs
+    val windowMs = prePadMs + clipMs + postPadMs
     if (startMs + windowMs > capture.durationMs) return null
     val startIdx = (startMs / SAMPLE_INTERVAL_MS).toInt()
     val count = (windowMs / SAMPLE_INTERVAL_MS).toInt().coerceAtLeast(1)
@@ -183,7 +187,8 @@ fun sliceCapture(
         gestureId = capture.gestureId,
         timestamp = capture.timestamp + startMs,
         durationMs = windowMs,
-        paddingMs = padMs,
+        prePaddingMs = prePadMs,
+        postPaddingMs = postPadMs,
         samples = capture.samples.subList(startIdx, endIdx),
         sourceCaptureId = capture.id,
         offsetMs = startMs
@@ -193,13 +198,14 @@ fun sliceCapture(
 fun buildSampleSet(
     capture: ContinuousCapture,
     sampleMs: Long,
-    padMs: Long,
+    prePadMs: Long,
+    postPadMs: Long,
     strategy: SampleStrategy,
     stepMs: Long,
     randomCount: Int
 ): SampleSet? {
     println("DEBUG: buildSampleSet - capture has ${capture.samples.size} samples, durationMs=${capture.durationMs}")
-    val extracted = extractSamplesFromCapture(capture, sampleMs, padMs, strategy, stepMs, randomCount)
+    val extracted = extractSamplesFromCapture(capture, sampleMs, prePadMs, postPadMs, strategy, stepMs, randomCount)
     println("DEBUG: extractSamplesFromCapture returned ${extracted.size} samples")
     if (extracted.isEmpty()) return null
     val setId = newId()
@@ -209,7 +215,8 @@ fun buildSampleSet(
         sourceCaptureId = capture.id,
         strategy = strategy,
         sampleMs = sampleMs,
-        paddingMs = padMs,
+        prePaddingMs = prePadMs,
+        postPaddingMs = postPadMs,
         stepMs = if (strategy == SampleStrategy.SLIDING) stepMs else null,
         randomCount = if (strategy == SampleStrategy.RANDOM) randomCount else null,
         samples = extracted.map { it.copy(sampleSetId = setId) }
@@ -219,15 +226,16 @@ fun buildSampleSet(
 fun extractSlidingClips(
     capture: ContinuousCapture,
     clipMs: Long,
-    padMs: Long,
+    prePadMs: Long,
+    postPadMs: Long,
     stepMs: Long
 ): List<Recording> {
     if (stepMs <= 0) return emptyList()
-    val windowMs = padMs + clipMs + padMs
+    val windowMs = prePadMs + clipMs + postPadMs
     val clips = mutableListOf<Recording>()
     var start = 0L
     while (start + windowMs <= capture.durationMs) {
-        sliceCapture(capture, start, clipMs, padMs)?.let { clips.add(it) }
+        sliceCapture(capture, start, clipMs, prePadMs, postPadMs)?.let { clips.add(it) }
         start += stepMs
     }
     return clips
@@ -236,11 +244,12 @@ fun extractSlidingClips(
 fun extractRandomClips(
     capture: ContinuousCapture,
     clipMs: Long,
-    padMs: Long,
+    prePadMs: Long,
+    postPadMs: Long,
     count: Int
 ): List<Recording> {
     if (count <= 0) return emptyList()
-    val windowMs = padMs + clipMs + padMs
+    val windowMs = prePadMs + clipMs + postPadMs
     val maxStart = capture.durationMs - windowMs
     if (maxStart < 0) return emptyList()
     val rnd = Random(capture.id.hashCode())
@@ -249,19 +258,20 @@ fun extractRandomClips(
         val start = if (maxStart == 0L) 0L else rnd.nextLong(maxStart + 1)
         starts.add(start - (start % SAMPLE_INTERVAL_MS))
     }
-    return starts.mapNotNull { sliceCapture(capture, it, clipMs, padMs) }
+    return starts.mapNotNull { sliceCapture(capture, it, clipMs, prePadMs, postPadMs) }
 }
 
 fun extractSamplesFromCapture(
     capture: ContinuousCapture,
     clipMs: Long,
-    padMs: Long,
+    prePadMs: Long,
+    postPadMs: Long,
     strategy: SampleStrategy,
     stepMs: Long,
     randomCount: Int
 ): List<Recording> = when (strategy) {
-    SampleStrategy.SLIDING -> extractSlidingClips(capture, clipMs, padMs, stepMs)
-    SampleStrategy.RANDOM -> extractRandomClips(capture, clipMs, padMs, randomCount)
+    SampleStrategy.SLIDING -> extractSlidingClips(capture, clipMs, prePadMs, postPadMs, stepMs)
+    SampleStrategy.RANDOM -> extractRandomClips(capture, clipMs, prePadMs, postPadMs, randomCount)
 }
 
 // TODO: replace with real streamed samples from the NRF52840 (accel/gyro
@@ -378,7 +388,8 @@ fun App(
 
     // Recording session config
     var recordMsInput by remember { mutableStateOf("200") }
-    var padMsInput by remember { mutableStateOf("20") }
+    var prePadMsInput by remember { mutableStateOf("20") }
+    var postPadMsInput by remember { mutableStateOf("20") }
     var sampleStrategy by remember { mutableStateOf(SampleStrategy.SLIDING) }
     var sampleStepMsInput by remember { mutableStateOf("100") }
     var sampleCountInput by remember { mutableStateOf("10") }
@@ -512,8 +523,9 @@ fun App(
 
         while (isSessionActive) {
             val coreMs = recordMsInput.toLongOrNull()
-            val padMs = padMsInput.toLongOrNull()
-            if (coreMs == null || coreMs <= 0 || padMs == null || padMs < 0) {
+            val prePadMs = prePadMsInput.toLongOrNull()
+            val postPadMs = postPadMsInput.toLongOrNull()
+            if (coreMs == null || coreMs <= 0 || prePadMs == null || prePadMs < 0 || postPadMs == null || postPadMs < 0) {
                 updateStatus("Invalid recording configuration")
                 isSessionActive = false
                 break
@@ -564,11 +576,11 @@ fun App(
                 recordedSamples.last().timestampMs
             }
             
-            val totalMs = padMs + coreMs + padMs
+            val totalMs = prePadMs + coreMs + postPadMs
             val recordingEndTimestamp = recordingStartTimestamp + totalMs
             
-            val displayMs = padMs + coreMs
-            val totalCaptureMs = padMs + coreMs + padMs
+            val displayMs = prePadMs + coreMs
+            val totalCaptureMs = prePadMs + coreMs + postPadMs
             var captureElapsed = 0L
             while (captureElapsed < totalCaptureMs) {
                 if (!isSessionActive) break
@@ -616,7 +628,8 @@ fun App(
             val recording = Recording(
                 gestureId = gid,
                 durationMs = totalMs,
-                paddingMs = padMs,
+                prePaddingMs = prePadMs,
+                postPaddingMs = postPadMs,
                 samples = finalSamples
             )
             recordings = recordings + recording
@@ -696,8 +709,10 @@ fun App(
                 bleConnected = bleStatus == BleStatus.CONNECTED,
                 recordMsInput = recordMsInput,
                 onRecordMsChange = { recordMsInput = it },
-                padMsInput = padMsInput,
-                onPadMsChange = { padMsInput = it },
+                prePadMsInput = prePadMsInput,
+                onPrePadMsChange = { prePadMsInput = it },
+                postPadMsInput = postPadMsInput,
+                onPostPadMsChange = { postPadMsInput = it },
                 sampleStrategy = sampleStrategy,
                 onSampleStrategyChange = { sampleStrategy = it },
                 sampleStepMsInput = sampleStepMsInput,
@@ -727,12 +742,11 @@ fun App(
                 },
                 onSampleCapture = { capture ->
                     val sampleMs = recordMsInput.toLongOrNull()
-                    val padMs = padMsInput.toLongOrNull()
                     val stepMs = sampleStepMsInput.toLongOrNull()
                     val randomCount = sampleCountInput.toIntOrNull()
-                    println("DEBUG: Sample request - capture.durationMs=${capture.durationMs}, sampleMs=$sampleMs, padMs=$padMs, strategy=$sampleStrategy, stepMs=$stepMs, randomCount=$randomCount")
+                    println("DEBUG: Sample request - capture.durationMs=${capture.durationMs}, sampleMs=$sampleMs, strategy=$sampleStrategy, stepMs=$stepMs, randomCount=$randomCount")
                     when {
-                        sampleMs == null || sampleMs <= 0 || padMs == null || padMs < 0 ->
+                        sampleMs == null || sampleMs <= 0 ->
                             updateStatus("Invalid sample configuration")
                         sampleStrategy == SampleStrategy.SLIDING && (stepMs == null || stepMs <= 0) ->
                             updateStatus("Invalid step configuration")
@@ -742,7 +756,8 @@ fun App(
                             val set = buildSampleSet(
                                 capture = capture,
                                 sampleMs = sampleMs,
-                                padMs = padMs,
+                                prePadMs = 0,
+                                postPadMs = 0,
                                 strategy = sampleStrategy,
                                 stepMs = stepMs ?: 0,
                                 randomCount = randomCount ?: 0
@@ -972,6 +987,87 @@ fun CompactIconButton(symbol: String, onClick: () -> Unit, tint: Color = Color(0
         contentAlignment = Alignment.Center
     ) {
         Text(symbol, style = TextStyle(fontFamily = AppFont, fontSize = 12.sp, color = actualTint))
+    }
+}
+
+/** Grouped pre + core + post window editor — matches CompactNumberField / CompactButton sizing. */
+@Composable
+fun RecordingWindowInput(
+    coreValue: String,
+    onCoreChange: (String) -> Unit,
+    preValue: String,
+    onPreChange: (String) -> Unit,
+    postValue: String,
+    onPostChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    groupLabel: String = "Window"
+) {
+    val pre = preValue.toLongOrNull()
+    val core = coreValue.toLongOrNull()
+    val post = postValue.toLongOrNull()
+    val totalLabel = if (pre != null && core != null && post != null) "${pre + core + post} ms" else null
+
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(groupLabel, style = Type.label)
+        Spacer(modifier = Modifier.width(4.dp))
+        Row(
+            modifier = Modifier
+                .height(24.dp)
+                .border(1.dp, Palette.border, RoundedCornerShape(3.dp))
+                .clip(RoundedCornerShape(3.dp)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            WindowSegment(preValue, onPreChange, enabled, width = 56.dp, shaded = true)
+            WindowDivider()
+            WindowSegment(coreValue, onCoreChange, enabled, width = 72.dp, emphasized = true)
+            WindowDivider()
+            WindowSegment(postValue, onPostChange, enabled, width = 56.dp, shaded = true)
+        }
+        if (totalLabel != null) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("($totalLabel)", style = Type.label.copy(color = Palette.muted))
+        }
+    }
+}
+
+@Composable
+private fun WindowDivider() {
+    Box(modifier = Modifier.width(1.dp).fillMaxHeight().background(Palette.border))
+}
+
+@Composable
+private fun WindowSegment(
+    value: String,
+    onValueChange: (String) -> Unit,
+    enabled: Boolean,
+    width: androidx.compose.ui.unit.Dp,
+    shaded: Boolean = false,
+    emphasized: Boolean = false
+) {
+    Box(
+        modifier = Modifier
+            .width(width)
+            .fillMaxHeight()
+            .background(
+                when {
+                    emphasized -> Color(0xFFF8FAFF)
+                    shaded -> Color(0xFFF4F4F4)
+                    else -> Color.Transparent
+                }
+            )
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = { new -> if (new.length <= 6 && new.all { it.isDigit() }) onValueChange(new) },
+            enabled = enabled,
+            singleLine = true,
+            textStyle = (if (emphasized) Type.monoMedium else Type.mono).copy(textAlign = TextAlign.Center),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -1330,7 +1426,6 @@ fun BottomStatusArea(
                     } else {
                         ImuPlot(
                             samples = liveSamples.takeLast(LIVE_PLOT_SAMPLES),
-                            paddingMs = 0,
                             compact = true,
                             fillHeight = true,
                             modifier = Modifier.fillMaxSize()
@@ -1477,8 +1572,10 @@ fun RecordingsPanel(
     bleConnected: Boolean,
     recordMsInput: String,
     onRecordMsChange: (String) -> Unit,
-    padMsInput: String,
-    onPadMsChange: (String) -> Unit,
+    prePadMsInput: String,
+    onPrePadMsChange: (String) -> Unit,
+    postPadMsInput: String,
+    onPostPadMsChange: (String) -> Unit,
     sampleStrategy: SampleStrategy,
     onSampleStrategyChange: (SampleStrategy) -> Unit,
     sampleStepMsInput: String,
@@ -1557,9 +1654,15 @@ fun RecordingsPanel(
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (gesture.recordMode == RecordMode.TIMED) {
-                    CompactNumberField("REC ms", recordMsInput, onRecordMsChange, enabled = !isSessionActive)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    CompactNumberField("PAD ms", padMsInput, onPadMsChange, enabled = !isSessionActive)
+                    RecordingWindowInput(
+                        coreValue = recordMsInput,
+                        onCoreChange = onRecordMsChange,
+                        preValue = prePadMsInput,
+                        onPreChange = onPrePadMsChange,
+                        postValue = postPadMsInput,
+                        onPostChange = onPostPadMsChange,
+                        enabled = !isSessionActive
+                    )
                     Spacer(modifier = Modifier.width(10.dp))
                 }
 
@@ -1632,7 +1735,7 @@ fun RecordingsPanel(
                             onDelete = { onDeleteCapture(capture) }
                         )
                         if (showPlots) {
-                            ImuPlot(samples = capture.samples, paddingMs = 0, modifier = Modifier.fillMaxWidth())
+                            ImuPlot(samples = capture.samples, modifier = Modifier.fillMaxWidth())
                         }
                         Divider()
                     }
@@ -1640,8 +1743,6 @@ fun RecordingsPanel(
                 SamplingConfigRow(
                     sampleMsInput = recordMsInput,
                     onSampleMsChange = onRecordMsChange,
-                    padMsInput = padMsInput,
-                    onPadMsChange = onPadMsChange,
                     sampleStrategy = sampleStrategy,
                     onSampleStrategyChange = onSampleStrategyChange,
                     sampleStepMsInput = sampleStepMsInput,
@@ -1661,7 +1762,6 @@ fun RecordingsPanel(
                 Text("N", style = Type.label, modifier = Modifier.width(28.dp))
                 Text("STRATEGY", style = Type.label, modifier = Modifier.width(88.dp))
                 Text("SAMPLE", style = Type.label, modifier = Modifier.width(52.dp))
-                Text("PAD", style = Type.label, modifier = Modifier.width(44.dp))
                 Text("", modifier = Modifier.weight(1f))
             }
             Divider()
@@ -1672,7 +1772,7 @@ fun RecordingsPanel(
                 Text("#", style = Type.label, modifier = Modifier.width(28.dp))
                 Text("TIME", style = Type.label, modifier = Modifier.width(90.dp))
                 Text("DURATION", style = Type.label, modifier = Modifier.width(80.dp))
-                Text("PAD", style = Type.label, modifier = Modifier.width(60.dp))
+                Text("PRE/POST", style = Type.label, modifier = Modifier.width(72.dp))
                 Text("PTS", style = Type.label, modifier = Modifier.width(70.dp))
                 Text("", modifier = Modifier.weight(1f))
             }
@@ -1695,7 +1795,12 @@ fun RecordingsPanel(
                     val index = recordings.size - recordings.indexOf(recording)
                     RecordingRow(index = index, recording = recording, onDelete = { onDeleteRecording(recording) })
                     if (showPlots) {
-                        ImuPlot(samples = recording.samples, paddingMs = recording.paddingMs, modifier = Modifier.fillMaxWidth())
+                        ImuPlot(
+                            samples = recording.samples,
+                            prePaddingMs = recording.prePaddingMs,
+                            postPaddingMs = recording.postPaddingMs,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                     Divider()
                 }
@@ -1722,8 +1827,6 @@ fun SectionLabel(title: String, count: Int) {
 fun SamplingConfigRow(
     sampleMsInput: String,
     onSampleMsChange: (String) -> Unit,
-    padMsInput: String,
-    onPadMsChange: (String) -> Unit,
     sampleStrategy: SampleStrategy,
     onSampleStrategyChange: (SampleStrategy) -> Unit,
     sampleStepMsInput: String,
@@ -1740,10 +1843,8 @@ fun SamplingConfigRow(
             .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        CompactNumberField("SAMPLE ms", sampleMsInput, onSampleMsChange)
-        Spacer(modifier = Modifier.width(8.dp))
-        CompactNumberField("PAD ms", padMsInput, onPadMsChange)
-        Spacer(modifier = Modifier.width(8.dp))
+        CompactNumberField("SAMPLE ms", sampleMsInput, onSampleMsChange, width = 64.dp)
+        Spacer(modifier = Modifier.width(10.dp))
         SampleStrategySelector(strategy = sampleStrategy, onStrategyChange = onSampleStrategyChange)
         Spacer(modifier = Modifier.width(8.dp))
         if (sampleStrategy == SampleStrategy.SLIDING) {
@@ -1836,7 +1937,6 @@ fun SampleSetRow(
             Text("${set.samples.size}", style = Type.monoMedium, modifier = Modifier.width(28.dp))
             Text(strategyLabel, style = Type.monoSmall, modifier = Modifier.width(88.dp))
             Text("${set.sampleMs}ms", style = Type.monoSmall, modifier = Modifier.width(52.dp))
-            Text("\u00B1${set.paddingMs}", style = Type.monoSmall, modifier = Modifier.width(44.dp))
             Row(
                 modifier = Modifier.weight(1f),
                 horizontalArrangement = Arrangement.End,
@@ -1855,7 +1955,6 @@ fun SampleSetRow(
                 Text("#", style = Type.label, modifier = Modifier.width(24.dp))
                 Text("TIME", style = Type.label, modifier = Modifier.width(84.dp))
                 Text("DURATION", style = Type.label, modifier = Modifier.width(72.dp))
-                Text("PAD", style = Type.label, modifier = Modifier.width(48.dp))
                 Text("PTS", style = Type.label, modifier = Modifier.width(48.dp))
             }
             set.samples.forEachIndexed { index, sample ->
@@ -1869,7 +1968,6 @@ fun SampleSetRow(
                     Text("${set.samples.size - index}", style = Type.mono, modifier = Modifier.width(24.dp))
                     Text(formatTimestamp(sample.timestamp), style = Type.mono, modifier = Modifier.width(84.dp))
                     Text("${sample.durationMs}ms", style = Type.mono, modifier = Modifier.width(72.dp))
-                    Text("\u00B1${sample.paddingMs}ms", style = Type.mono, modifier = Modifier.width(48.dp))
                     Text("${sample.sampleCount}", style = Type.mono, modifier = Modifier.width(48.dp))
                     Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
                         CompactIconButton(symbol = "\u2715", onClick = { onDeleteSample(sample) })
@@ -1878,7 +1976,6 @@ fun SampleSetRow(
                 if (showPlots) {
                     ImuPlot(
                         samples = sample.samples,
-                        paddingMs = sample.paddingMs,
                         modifier = Modifier.fillMaxWidth().padding(start = 26.dp)
                     )
                 }
@@ -1987,7 +2084,7 @@ fun RecordingRow(
         Text("$index", style = Type.mono, modifier = Modifier.width(28.dp))
         Text(formatTimestamp(recording.timestamp), style = Type.mono, modifier = Modifier.width(90.dp))
         Text("${recording.durationMs}ms", style = Type.mono, modifier = Modifier.width(80.dp))
-        Text("\u00B1${recording.paddingMs}ms", style = Type.mono, modifier = Modifier.width(60.dp))
+        Text("${recording.prePaddingMs}/${recording.postPaddingMs}", style = Type.mono, modifier = Modifier.width(72.dp))
         Text("${recording.sampleCount}", style = Type.mono, modifier = Modifier.width(70.dp))
         Row(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
             CompactIconButton(symbol = "\u2715", onClick = onDelete)
@@ -2002,7 +2099,8 @@ fun RecordingRow(
 @Composable
 fun ImuPlot(
     samples: List<ImuSample>,
-    paddingMs: Long,
+    prePaddingMs: Long = 0,
+    postPaddingMs: Long = 0,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     fillHeight: Boolean = false
@@ -2014,8 +2112,8 @@ fun ImuPlot(
     } else {
         (samples.size * SAMPLE_INTERVAL_MS).toFloat()
     }
-    val preFrac = if (totalMs > 0) (paddingMs / totalMs).coerceIn(0f, 1f) else 0f
-    val postFrac = 1f - preFrac
+    val preFrac = if (totalMs > 0) (prePaddingMs / totalMs).coerceIn(0f, 1f) else 0f
+    val postFrac = if (totalMs > 0) (1f - postPaddingMs / totalMs).coerceIn(0f, 1f) else 1f
     
     var hoverX by remember { mutableStateOf<Float?>(null) }
     var hoverY by remember { mutableStateOf<Float?>(null) }
@@ -2043,7 +2141,8 @@ fun ImuPlot(
         // Gyro + Accel plot
         ImuPlotCanvas(
             samples = samples,
-            paddingMs = paddingMs,
+            prePaddingMs = prePaddingMs,
+            postPaddingMs = postPaddingMs,
             preFrac = preFrac,
             postFrac = postFrac,
             hoverX = hoverX,
@@ -2080,7 +2179,8 @@ fun ImuPlot(
         // Orientation plot
         ImuPlotCanvas(
             samples = samples,
-            paddingMs = paddingMs,
+            prePaddingMs = prePaddingMs,
+            postPaddingMs = postPaddingMs,
             preFrac = preFrac,
             postFrac = postFrac,
             hoverX = hoverX,
@@ -2148,7 +2248,8 @@ fun ImuPlot(
 @Composable
 fun ImuPlotCanvas(
     samples: List<ImuSample>,
-    paddingMs: Long,
+    prePaddingMs: Long,
+    postPaddingMs: Long,
     preFrac: Float,
     postFrac: Float,
     hoverX: Float?,
@@ -2186,7 +2287,7 @@ fun ImuPlotCanvas(
             val preX = w * preFrac
             val postX = w * postFrac
 
-            if (paddingMs > 0) {
+            if (prePaddingMs > 0 || postPaddingMs > 0) {
                 drawRect(color = Palette.padShade, topLeft = Offset(0f, 0f), size = Size(preX, h))
                 drawRect(color = Palette.padShade, topLeft = Offset(postX, 0f), size = Size(w - postX, h))
                 val dash = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()))

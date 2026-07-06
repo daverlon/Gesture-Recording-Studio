@@ -183,7 +183,7 @@ fun main() = application {
     // Helper functions for export
     fun buildRecordingCsv(gestureName: String, mode: RecordMode, recording: Recording): String {
         return buildString {
-            appendLine("# Gesture: $gestureName, Mode: $mode, Duration: ${recording.durationMs}ms, Padding: ${recording.paddingMs}ms")
+            appendLine("# Gesture: $gestureName, Mode: $mode, Duration: ${recording.durationMs}ms, PrePadding: ${recording.prePaddingMs}ms, PostPadding: ${recording.postPaddingMs}ms")
             appendLine("# Recorded: ${java.time.Instant.ofEpochMilli(recording.timestamp)}, Samples: ${recording.samples.size}")
             appendLine("timestamp_ms,ax,ay,az,gx,gy,gz,roll,pitch,yaw")
             recording.samples.forEachIndexed { index, sample ->
@@ -210,7 +210,6 @@ fun main() = application {
             appendLine("Sample Set Information")
             appendLine("Strategy: ${sampleSet.strategy}")
             appendLine("Sample Duration: ${sampleSet.sampleMs}ms")
-            appendLine("Padding: ${sampleSet.paddingMs}ms")
             when (sampleSet.strategy) {
                 SampleStrategy.SLIDING -> appendLine("Step: ${sampleSet.stepMs}ms")
                 SampleStrategy.RANDOM -> appendLine("Count: ${sampleSet.randomCount}")

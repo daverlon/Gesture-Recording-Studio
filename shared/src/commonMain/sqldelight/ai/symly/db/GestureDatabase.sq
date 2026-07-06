@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS Recording (
     gestureId TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     durationMs INTEGER NOT NULL,
-    paddingMs INTEGER NOT NULL,
+    prePaddingMs INTEGER NOT NULL,
+    postPaddingMs INTEGER NOT NULL,
     sourceCaptureId TEXT,
     sampleSetId TEXT,
     offsetMs INTEGER,
@@ -69,7 +70,8 @@ CREATE TABLE IF NOT EXISTS SampleSet (
     timestamp INTEGER NOT NULL,
     strategy TEXT NOT NULL,
     sampleMs INTEGER NOT NULL,
-    paddingMs INTEGER NOT NULL,
+    prePaddingMs INTEGER NOT NULL,
+    postPaddingMs INTEGER NOT NULL,
     stepMs INTEGER,
     randomCount INTEGER,
     FOREIGN KEY (gestureId) REFERENCES Gesture(id) ON DELETE CASCADE,
@@ -92,8 +94,8 @@ DELETE FROM Gesture WHERE id = ?;
 
 -- Queries for Recording
 insertRecording:
-INSERT OR REPLACE INTO Recording(id, gestureId, timestamp, durationMs, paddingMs, sourceCaptureId, sampleSetId, offsetMs)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO Recording(id, gestureId, timestamp, durationMs, prePaddingMs, postPaddingMs, sourceCaptureId, sampleSetId, offsetMs)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectRecordingsByGesture:
 SELECT * FROM Recording WHERE gestureId = ? ORDER BY timestamp DESC;
@@ -142,8 +144,8 @@ DELETE FROM ContinuousCaptureSample WHERE captureId = ?;
 
 -- Queries for SampleSet
 insertSampleSet:
-INSERT OR REPLACE INTO SampleSet(id, gestureId, sourceCaptureId, timestamp, strategy, sampleMs, paddingMs, stepMs, randomCount)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO SampleSet(id, gestureId, sourceCaptureId, timestamp, strategy, sampleMs, prePaddingMs, postPaddingMs, stepMs, randomCount)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectSampleSetsByGesture:
 SELECT * FROM SampleSet WHERE gestureId = ? ORDER BY timestamp DESC;

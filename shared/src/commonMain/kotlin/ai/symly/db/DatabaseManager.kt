@@ -50,7 +50,8 @@ class DatabaseManager(private val database: GestureDatabase) {
             gestureId = recording.gestureId,
             timestamp = recording.timestamp,
             durationMs = recording.durationMs,
-            paddingMs = recording.paddingMs,
+            prePaddingMs = recording.prePaddingMs,
+            postPaddingMs = recording.postPaddingMs,
             sourceCaptureId = recording.sourceCaptureId,
             sampleSetId = recording.sampleSetId,
             offsetMs = recording.offsetMs
@@ -98,7 +99,8 @@ class DatabaseManager(private val database: GestureDatabase) {
                 gestureId = rec.gestureId,
                 timestamp = rec.timestamp,
                 durationMs = rec.durationMs,
-                paddingMs = rec.paddingMs,
+                prePaddingMs = rec.prePaddingMs,
+                postPaddingMs = rec.postPaddingMs,
                 samples = samples,
                 sourceCaptureId = rec.sourceCaptureId,
                 sampleSetId = rec.sampleSetId,
@@ -177,7 +179,8 @@ class DatabaseManager(private val database: GestureDatabase) {
             timestamp = sampleSet.timestamp,
             strategy = sampleSet.strategy.name,
             sampleMs = sampleSet.sampleMs,
-            paddingMs = sampleSet.paddingMs,
+            prePaddingMs = sampleSet.prePaddingMs,
+            postPaddingMs = sampleSet.postPaddingMs,
             stepMs = sampleSet.stepMs,
             randomCount = sampleSet.randomCount?.toLong()
         )
@@ -207,7 +210,8 @@ class DatabaseManager(private val database: GestureDatabase) {
                 timestamp = set.timestamp,
                 strategy = ai.symly.SampleStrategy.valueOf(set.strategy),
                 sampleMs = set.sampleMs,
-                paddingMs = set.paddingMs,
+                prePaddingMs = set.prePaddingMs,
+                postPaddingMs = set.postPaddingMs,
                 stepMs = set.stepMs,
                 randomCount = set.randomCount?.toInt(),
                 samples = recordings
