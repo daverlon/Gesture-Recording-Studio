@@ -503,7 +503,7 @@ fun App(
             return@LaunchedEffect
         }
 
-        // TIMED: countdown -> capture (pre+core+post, bar fills seamlessly over pre+core) -> save -> repeat
+        // TIMED: countdown -> beep = core start (blue bar) -> post (silent); pre is captured before the beep
         suspend fun tickPhase(targetMs: Long, onTick: (Long) -> Unit): Boolean {
             var elapsed = 0L
             while (elapsed < targetMs) {
@@ -549,49 +549,41 @@ fun App(
                 }
             }) break
 
-            playBeep() // Beep when recording starts
+            playBeep() // Beep when core window starts
             sessionPhase = SessionPhase.CORE
             phaseTargetMs = coreMs
             phaseElapsedMs = 0
             updateStatus("Recording '$gestureName'... (Press SPACE to stop)")
 
-            // Wait for a fresh batch to arrive, then use its timestamp as recording start
             if (recordedSamples.isEmpty()) {
                 updateStatus("Waiting for sensor data...")
-                delay(200) // Wait for first samples
+                delay(200)
                 if (recordedSamples.isEmpty()) {
                     updateStatus("No sensor data received")
                     break
                 }
             }
-            
-            // Wait for a fresh batch (25-50ms) to ensure we're starting with current data
+
             val samplesBefore = recordedSamples.size
             delay(50)
-            
-            // Use the first NEW sample as the recording start
-            val recordingStartTimestamp = if (recordedSamples.size > samplesBefore) {
+
+            val coreStartTimestamp = if (recordedSamples.size > samplesBefore) {
                 recordedSamples[samplesBefore].timestampMs
             } else {
                 recordedSamples.last().timestampMs
             }
-            
+
             val totalMs = prePadMs + coreMs + postPadMs
-            val recordingEndTimestamp = recordingStartTimestamp + totalMs
-            
-            val displayMs = prePadMs + coreMs
-            val totalCaptureMs = prePadMs + coreMs + postPadMs
-            var captureElapsed = 0L
-            while (captureElapsed < totalCaptureMs) {
-                if (!isSessionActive) break
-                delay(UI_TICK_MS)
-                captureElapsed = (captureElapsed + UI_TICK_MS).coerceAtMost(totalCaptureMs)
-                phaseElapsedMs = if (displayMs > 0 && captureElapsed <= displayMs) {
-                    (captureElapsed * coreMs / displayMs).coerceAtMost(coreMs)
-                } else {
-                    coreMs
-                }
-            }
+            val recordingStartTimestamp = coreStartTimestamp - prePadMs
+            val recordingEndTimestamp = coreStartTimestamp + coreMs + postPadMs
+
+            if (!tickPhase(coreMs) { elapsed ->
+                phaseElapsedMs = elapsed
+            }) break
+
+            sessionPhase = SessionPhase.POST_PAD
+            if (!tickPhase(postPadMs) { }) break
+
             if (!isSessionActive) break
             
             // Wait extra time for batched samples to arrive via BLE (batches sent every 25ms)
@@ -617,6 +609,7 @@ fun App(
             println("Actual samples: ${finalSamples.size}")
             println("Actual duration: ${actualDuration}ms")
             println("Timestamp window: $recordingStartTimestamp to $recordingEndTimestamp")
+            println("Core starts at: $coreStartTimestamp (pre=${prePadMs}ms before beep)")
             println("First sample timestamp: ${finalSamples.first().timestampMs}")
             println("Last sample timestamp: ${finalSamples.last().timestampMs}")
             if (finalSamples.size > 1) {
