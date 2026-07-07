@@ -311,7 +311,8 @@ fun App(
     databaseManager: ai.symly.db.DatabaseManager? = null,
     onStatusUpdate: ((String) -> Unit)? = null,
     onRequestStop: (() -> Boolean)? = null,
-    countdownSeconds: Int = 3
+    countdownSeconds: Int = 3,
+    countdownBeepsEnabled: Boolean = false
 ) {
     var gestures by remember { mutableStateOf(listOf<Gesture>()) }
     var recordings by remember { mutableStateOf(listOf<Recording>()) }
@@ -385,6 +386,7 @@ fun App(
 
     var showAddDialog by remember { mutableStateOf(false) }
     var gesturePendingDelete by remember { mutableStateOf<Gesture?>(null) }
+    var gesturePendingRename by remember { mutableStateOf<Gesture?>(null) }
 
     // Recording session config
     var recordMsInput by remember { mutableStateOf("200") }
@@ -537,19 +539,18 @@ fun App(
             phaseElapsedMs = 0
             countdownValue = countdownSeconds
             updateStatus("Next recording in $countdownSeconds... (Press SPACE to stop)")
-            playBeep() // Initial beep
-            var lastBeepValue = countdownSeconds
+            if (countdownBeepsEnabled) playBeep()
             if (!tickPhase(countdownMs) { elapsed ->
                 phaseElapsedMs = elapsed
                 val newCountdown = ((countdownMs - elapsed + 999) / 1000).toInt().coerceAtLeast(1)
                 if (newCountdown != countdownValue) {
-                    playBeep()
+                    if (countdownBeepsEnabled) playBeep()
                     countdownValue = newCountdown
                     updateStatus("Next recording in $countdownValue... (Press SPACE to stop)")
                 }
             }) break
 
-            playBeep() // Beep when core window starts
+            if (countdownBeepsEnabled) playBeep() // Beep when core window starts
             sessionPhase = SessionPhase.CORE
             phaseTargetMs = coreMs
             phaseElapsedMs = 0
@@ -681,7 +682,8 @@ fun App(
                                 selectedGestureId = gesture.id
                                 updateStatus("Selected '${gesture.name}'")
                             },
-                            onDeleteClick = { gesturePendingDelete = gesture }
+                            onDeleteClick = { gesturePendingDelete = gesture },
+                            onRenameClick = { gesturePendingRename = gesture }
                         )
                         Divider()
                     }
@@ -887,6 +889,23 @@ fun App(
                     }
                     updateStatus("Added gesture '$name'")
                     showAddDialog = false
+                }
+            )
+        }
+
+        gesturePendingRename?.let { gesture ->
+            RenameGestureDialog(
+                gesture = gesture,
+                existingNames = gestures.map { it.name },
+                onDismiss = { gesturePendingRename = null },
+                onConfirm = { newName ->
+                    val updated = gesture.copy(name = newName)
+                    gestures = gestures.map { if (it.id == gesture.id) updated else it }
+                    scope.launch {
+                        databaseManager?.saveGesture(updated)
+                    }
+                    updateStatus("Renamed '${gesture.name}' → '$newName'")
+                    gesturePendingRename = null
                 }
             )
         }
@@ -1529,6 +1548,7 @@ fun GestureRow(
     recordingCount: Int,
     selected: Boolean,
     onClick: () -> Unit,
+    onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
     Row(
@@ -1547,6 +1567,7 @@ fun GestureRow(
             modifier = Modifier.padding(end = 4.dp)
         )
         Text("$recordingCount", style = Type.label, modifier = Modifier.padding(end = 6.dp))
+        CompactIconButton(symbol = "\u270E", onClick = onRenameClick)
         CompactIconButton(symbol = "\u2715", onClick = onDeleteClick)
     }
 }
@@ -2362,5 +2383,44 @@ fun AddGestureDialog(
         Text("Mode", style = Type.label)
         Spacer(modifier = Modifier.height(6.dp))
         RecordModeSelector(mode = recordMode, onModeChange = { recordMode = it })
+    }
+}
+
+@Composable
+fun RenameGestureDialog(
+    gesture: Gesture,
+    existingNames: List<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember(gesture.id) { mutableStateOf(gesture.name) }
+    val trimmed = name.trim()
+    val unchanged = trimmed.equals(gesture.name, ignoreCase = true)
+    val isDuplicate = existingNames.any {
+        it.equals(trimmed, ignoreCase = true) && !it.equals(gesture.name, ignoreCase = true)
+    }
+    val isValid = trimmed.isNotEmpty() && !isDuplicate && !unchanged
+
+    AppDialog(
+        title = "Rename gesture",
+        onDismiss = onDismiss,
+        confirmText = "Rename",
+        onConfirm = { onConfirm(trimmed) },
+        confirmEnabled = isValid
+    ) {
+        CompactTextField(
+            label = "Name",
+            value = name,
+            onValueChange = { name = it },
+            isError = isDuplicate
+        )
+        if (isDuplicate) {
+            Text("Name exists", style = Type.label.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            if (gesture.recordMode == RecordMode.TIMED) "TIMED" else "CONTINUOUS",
+            style = Type.label.copy(color = Palette.muted)
+        )
     }
 }

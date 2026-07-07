@@ -427,7 +427,8 @@ fun main() = application {
                 if (shouldStop) stopRecordingRequested = false
                 shouldStop
             },
-            countdownSeconds = settings.countdownSeconds
+            countdownSeconds = settings.countdownSeconds,
+            countdownBeepsEnabled = settings.countdownBeepsEnabled
         )
     }
 }

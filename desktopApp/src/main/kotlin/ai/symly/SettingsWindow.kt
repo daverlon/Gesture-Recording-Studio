@@ -185,6 +185,15 @@ private fun TimedRecordingsSettings(
             },
             range = 1..10
         )
+
+        SettingCheckbox(
+            label = "Recording beeps",
+            description = "Beep during countdown and at core start. (Off recommended on Mac - system beeps can disrupt Bluetooth/audio output)",
+            checked = settings.countdownBeepsEnabled,
+            onCheckedChange = {
+                onSettingsChange(settings.copy(countdownBeepsEnabled = it))
+            }
+        )
     }
 }
 
