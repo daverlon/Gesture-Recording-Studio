@@ -11,6 +11,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -368,6 +369,12 @@ fun main() = application {
     }
     
     var stopRecordingRequested by remember { mutableStateOf(false) }
+    var showPreview3d by remember { mutableStateOf(false) }
+    val previewSampleFlow = remember {
+        MutableSharedFlow<ImuSample>(extraBufferCapacity = 64)
+    }
+    // Mirror BLE connection for the preview window status label
+    var previewBleConnected by remember { mutableStateOf(false) }
     
     Window(
         onCloseRequest = ::exitApplication,
@@ -418,6 +425,21 @@ fun main() = application {
                 onCloseRequest = { showSettings = false }
             )
         }
+
+        if (showPreview3d) {
+            Preview3DWindow(
+                sampleFlow = previewSampleFlow,
+                connected = previewBleConnected,
+                onCloseRequest = {
+                    showPreview3d = false
+                    previewBleConnected = false
+                }
+            )
+        }
+
+        LaunchedEffect(showPreview3d) {
+            if (!showPreview3d) previewBleConnected = false
+        }
         
         App(
             databaseManager = database,
@@ -428,7 +450,13 @@ fun main() = application {
                 shouldStop
             },
             countdownSeconds = settings.countdownSeconds,
-            countdownBeepsEnabled = settings.countdownBeepsEnabled
+            countdownBeepsEnabled = settings.countdownBeepsEnabled,
+            preview3dOpen = showPreview3d,
+            onPreview3dOpenChange = { showPreview3d = it },
+            onPreviewSample = { sample ->
+                if (!previewBleConnected) previewBleConnected = true
+                previewSampleFlow.tryEmit(sample)
+            }
         )
     }
 }

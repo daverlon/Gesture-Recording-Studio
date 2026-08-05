@@ -312,7 +312,10 @@ fun App(
     onStatusUpdate: ((String) -> Unit)? = null,
     onRequestStop: (() -> Boolean)? = null,
     countdownSeconds: Int = 3,
-    countdownBeepsEnabled: Boolean = false
+    countdownBeepsEnabled: Boolean = false,
+    preview3dOpen: Boolean = false,
+    onPreview3dOpenChange: ((Boolean) -> Unit)? = null,
+    onPreviewSample: ((ImuSample) -> Unit)? = null
 ) {
     var gestures by remember { mutableStateOf(listOf<Gesture>()) }
     var recordings by remember { mutableStateOf(listOf<Recording>()) }
@@ -408,6 +411,7 @@ fun App(
         bleStatus = BleStatus.DISCONNECTED
         deviceName = null
         liveDataEnabled = false
+        if (preview3dOpen) onPreview3dOpenChange?.invoke(false)
         liveDataLogs = emptyList()
         liveMessageCount = 0
         liveSamplesPerSecond = 0
@@ -428,6 +432,7 @@ fun App(
             }
             liveDataLogs = (liveDataLogs + formatImuLogLine(sample)).takeLast(LIVE_LOG_BUFFER)
             liveMessageCount++
+            onPreviewSample?.invoke(sample)
             
             // Track sample rate (samples per second)
             val now = nowMs()
@@ -818,11 +823,13 @@ fun App(
             bleStatus = bleStatus,
             deviceName = deviceName,
             liveDataEnabled = liveDataEnabled,
+            preview3dOpen = preview3dOpen,
             liveMessageCount = liveMessageCount,
             liveSamplesPerSecond = liveSamplesPerSecond,
             liveSamples = recordedSamples,
             liveLogs = liveDataLogs,
             onLiveDataToggle = { liveDataEnabled = it },
+            onPreview3dToggle = { onPreview3dOpenChange?.invoke(!preview3dOpen) },
             onConnectClick = {
                 when (bleStatus) {
                     BleStatus.DISCONNECTED -> openBlePicker()
@@ -1394,11 +1401,13 @@ fun BottomStatusArea(
     bleStatus: BleStatus,
     deviceName: String?,
     liveDataEnabled: Boolean,
+    preview3dOpen: Boolean,
     liveMessageCount: Int,
     liveSamplesPerSecond: Int,
     liveSamples: List<ImuSample>,
     liveLogs: List<String>,
     onLiveDataToggle: (Boolean) -> Unit,
+    onPreview3dToggle: () -> Unit,
     onConnectClick: () -> Unit
 ) {
     var stripHeight by remember { mutableStateOf(LiveDataStripDefaultHeight) }
@@ -1464,9 +1473,11 @@ fun BottomStatusArea(
             bleStatus = bleStatus,
             deviceName = deviceName,
             liveDataEnabled = liveDataEnabled,
+            preview3dOpen = preview3dOpen,
             liveMessageCount = liveMessageCount,
             liveSamplesPerSecond = liveSamplesPerSecond,
             onLiveDataToggle = onLiveDataToggle,
+            onPreview3dToggle = onPreview3dToggle,
             onConnectClick = onConnectClick
         )
     }
@@ -1478,9 +1489,11 @@ fun StatusBar(
     bleStatus: BleStatus,
     deviceName: String?,
     liveDataEnabled: Boolean,
+    preview3dOpen: Boolean,
     liveMessageCount: Int,
     liveSamplesPerSecond: Int,
     onLiveDataToggle: (Boolean) -> Unit,
+    onPreview3dToggle: () -> Unit,
     onConnectClick: () -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
@@ -1517,6 +1530,13 @@ fun StatusBar(
                 onClick = { onLiveDataToggle(!liveDataEnabled) },
                 enabled = bleStatus == BleStatus.CONNECTED,
                 filled = liveDataEnabled
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            CompactButton(
+                text = "3D Preview",
+                onClick = onPreview3dToggle,
+                enabled = bleStatus == BleStatus.CONNECTED,
+                filled = preview3dOpen
             )
             Spacer(modifier = Modifier.width(10.dp))
             val (dotColor, label) = when (bleStatus) {
