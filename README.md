@@ -1,6 +1,6 @@
 # Gesture Recording Studio
 
-A desktop app for building IMU gesture datasets. It connects to a Symly wrist band over
+A desktop app for building IMU gesture datasets. It connects to a wrist-worn IMU band over
 Bluetooth LE, records labelled accelerometer / gyroscope / orientation streams into a
 single-file project, and exports them as ML-ready CSV.
 
@@ -42,7 +42,7 @@ machine. ([Full-quality video](gesture_preview.mp4))
 | JDK | 21 — provisioned automatically by the Gradle toolchain (Amazon Corretto) |
 | Gradle | 9.1.0 via the bundled wrapper, no local install needed |
 | OS | macOS, Windows, or Linux |
-| Hardware | A Symly IMU band (nRF52840 firmware) and a Bluetooth LE adapter |
+| Hardware | A wrist-worn nRF52840 IMU band and a Bluetooth LE adapter |
 
 ## Quick start
 
